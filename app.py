@@ -60,10 +60,58 @@ if (
         st.error("Tipo de utilizador inválido.")
     st.stop()
 
+# Aplica um fundo escuro suave à tela toda
+st.markdown("""
+<style>
+body, .stApp {
+    background: linear-gradient(120deg, #232946 0%, #394867 100%) !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # Página de login (só aparece se NÃO estiver logado)
-st.title("🏠 Home - Login SMID")
+st.markdown("""
+<div style="
+    max-width: 420px;
+    margin: 60px auto 0 auto;
+    padding: 32px 28px 24px 28px;
+    background: linear-gradient(120deg, #e3f2fd 60%, #90caf9 100%);
+    border-radius: 18px;
+    box-shadow: 0 4px 24px #0004;
+    border-left: 8px solid #1976d2;
+    text-align: center;
+">
+    <div style="font-size:2.5rem; margin-bottom:8px;">🚚</div>
+    <h2 style="color:#1976d2; font-weight:800; letter-spacing:1px; margin-bottom:10px;">SMID - Login</h2>
+    <span style="color:#333; font-size:1.1rem;">Acesse o sistema com seu utilizador e palavra-passe.</span>
+</div>
+""", unsafe_allow_html=True)
+
+# Melhora contraste dos labels e campos de texto para fundo escuro
+st.markdown("""
+<style>
+label, .stTextInput > label {
+    color: #f5f7fa !important;
+    font-weight: 700 !important;
+    font-size: 1.12rem !important;
+    letter-spacing: 0.5px;
+}
+input {
+    background-color: #232946 !important;
+    color: #f5f7fa !important;
+    border-radius: 7px !important;
+    border: 1.5px solid #90caf9 !important;
+}
+.stTextInput input:focus {
+    border: 2px solid #1976d2 !important;
+    background-color: #232946 !important;
+    color: #fff !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 with st.form("login_form"):
+    st.markdown('<div style="height: 16px"></div>', unsafe_allow_html=True)
     username = st.text_input("Utilizador (ID)")
     senha = st.text_input("Palavra-passe", type="password")
     login_btn = st.form_submit_button("Entrar")

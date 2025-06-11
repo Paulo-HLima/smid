@@ -126,6 +126,8 @@ label, .stSelectbox > label {
     if "show_ag_concluidos" not in st.session_state:
         st.session_state.show_ag_concluidos = False
 
+    st.divider()
+
     # Botão toggle para agendamentos
     if st.button("📅 Ver Agendamentos", key="btn_agendamentos_gestor"):
         st.session_state.show_agendamentos_gestor = not st.session_state.show_agendamentos_gestor
@@ -462,8 +464,7 @@ label, .stSelectbox > label {
                 "Ocupada": ("#1976d2", "#e3f2fd", "#90caf9", "#1976d2", "🔵", "Ocupada"),
                 "Em preparação": ("#b28704", "#fff9e1", "#ffe082", "#b28704", "🟡", "Em preparação"),
             }[info["status"]]
-            # Agora pega clientes alocados diretamente do CLIENTES
-            clientes_alocados = [c for c, v in CLIENTES.items() if doca in v["docas"]]
+            clientes_alocados = st.session_state.alocacoes_docas.get(doca, [])
             st.markdown(f"""
             <div style="
                 background: linear-gradient(90deg, {cor_grad1} 60%, {cor_grad2} 100%);
@@ -491,7 +492,7 @@ label, .stSelectbox > label {
             """, unsafe_allow_html=True)
 
             # Selecionar cliente para alocar
-            clientes_disponiveis = [c for c in CLIENTES if doca not in CLIENTES[c]["docas"]]
+            clientes_disponiveis = [c for c in CLIENTES if c not in clientes_alocados]
             col1, col2 = st.columns(2)
             with col1:
                 cliente_sel = st.selectbox(
@@ -501,8 +502,7 @@ label, .stSelectbox > label {
                 )
                 if cliente_sel:
                     if st.button(f"Alocar {cliente_sel} em {doca}", key=f"alocar_{cliente_sel}_{doca}"):
-                        if doca not in CLIENTES[cliente_sel]["docas"]:
-                            CLIENTES[cliente_sel]["docas"].append(doca)
+                        st.session_state.alocacoes_docas[doca].append(cliente_sel)
                         st.success(f"Cliente {cliente_sel} alocado em {doca}.")
                         st.rerun()
             with col2:
@@ -514,11 +514,10 @@ label, .stSelectbox > label {
                     )
                     if cliente_remover:
                         if st.button(f"Remover {cliente_remover} de {doca}", key=f"remover_{cliente_remover}_{doca}"):
-                            if doca in CLIENTES[cliente_remover]["docas"]:
-                                CLIENTES[cliente_remover]["docas"].remove(doca)
+                            st.session_state.alocacoes_docas[doca].remove(cliente_remover)
                             st.warning(f"Cliente {cliente_remover} removido de {doca}.")
                             st.rerun()
-    st.divider()
+            st.divider()
 
     # Sincroniza status das docas com os agendamentos mais recentes
     for doca_id in DOCAS.keys():
@@ -713,7 +712,6 @@ label, .stSelectbox > label {
     if st.session_state.show_metricas_gestor:
         painel_metricas()
 
-    st.divider()
     st.divider()
     st.markdown(
     f'<div style="color:#90caf9; font-size:0.98rem; margin-top:24px; text-align:right;">Utilizador: <b>ID:</b> {usuario} &nbsp;|&nbsp; <b>Email:</b> {usuario}@cliente.smid</div>',

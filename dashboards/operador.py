@@ -68,6 +68,8 @@ def render():
     if "show_encomendas_operador" not in st.session_state:
         st.session_state.show_encomendas_operador = False
 
+    st.divider()
+
     # Botão toggle para encomendas
     if st.button("📦 Ver Encomendas", key="btn_encomendas_operador"):
         st.session_state.show_encomendas_operador = not st.session_state.show_encomendas_operador
@@ -87,6 +89,7 @@ def render():
                 '<div style="color:#d32f2f; font-weight:700; background:#fff3cd; padding:16px 18px; border-radius:8px; border-left:5px solid #d32f2f;">Nenhuma encomenda ativa para exibir.</div>',
                 unsafe_allow_html=True
             )
+            st.divider()       
         else:
             for encomenda in encomendas_ativas:
                 ag = AGENDAMENTOS[encomenda["agendamento_idx"]]
@@ -230,7 +233,7 @@ def render():
                     alerta["resolvido_em"] = datetime.now().strftime("%d/%m/%Y %H:%M")
                     st.success("Alerta resolvido!")
                     st.rerun()
-
+        st.divider()
         # Sub-botão para mostrar alertas resolvidos
         if st.button("🔽 Alertas Resolvidos", key="btn_alertas_resolvidos_operador"):
             st.session_state.show_alertas_resolvidos_operador = not st.session_state.show_alertas_resolvidos_operador

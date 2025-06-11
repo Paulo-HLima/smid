@@ -69,6 +69,8 @@ def render():
     if "show_encomendas" not in st.session_state:
         st.session_state.show_encomendas = False
 
+    st.divider()
+
     # Botão toggle para agendamentos
     if st.button("📅 Ver Agendamentos", key="btn_agendamentos"):
         st.session_state.show_agendamentos = not st.session_state.show_agendamentos

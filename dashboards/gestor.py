@@ -1,15 +1,28 @@
 import streamlit as st
 from utils.auth import verificar_autenticacao
-from utils.dados import AGENDAMENTOS, ALERTAS, DOCAS, ENCOMENDAS, CLIENTES
 from datetime import datetime, timedelta
 import pandas as pd
 from streamlit_option_menu import option_menu
+from database.db import (
+    buscar_agendamentos,
+    buscar_docas,
+    buscar_clientes,
+    buscar_alocacoes_docas,
+    alocar_doca_cliente,
+    desalocar_doca_cliente,
+    atualizar_agendamento_status,
+    atualizar_agendamento_doca_data_hora,
+    buscar_alertas,
+    resolver_alerta,
+    buscar_encomendas,
+    cancelar_encomenda,
+    atualizar_status_doca,
+)
 
 def render():
 
     st.markdown("""
 <style>
-/* Altera cor e estilo dos labels dos campos de seleção */
 label, .stSelectbox > label {
     color: #d0e4f7 !important;
     font-weight: 700 !important;
@@ -19,11 +32,9 @@ label, .stSelectbox > label {
 </style>
 """, unsafe_allow_html=True)
 
-
     if not verificar_autenticacao("gestor"):
         st.stop()
 
-    # Aplica fundo escuro e agradável ao dashboard do gestor
     st.markdown("""
     <style>
     body, .stApp {
@@ -32,7 +43,6 @@ label, .stSelectbox > label {
     </style>
     """, unsafe_allow_html=True)
 
-    # Cabeçalho visual padronizado do dashboard gestor
     st.markdown(f"""
     <div style="
         max-width: 900px;
@@ -50,57 +60,42 @@ label, .stSelectbox > label {
         <div style="font-size:2.5rem;">🚚</div>
         <div>
             <h1 style="color:#1976d2; font-weight:800; letter-spacing:1px; margin-bottom:8px; margin-top:0;">Dashboard do Gestor</h1>
-            <span style="color:#222; font-size:1.13rem;">Bem-vindo, <b>{st.session_state.usuario}</b>!</span>
+            <span style="color:#222; font-size:1.13rem;">Bem-vindo, <b>{st.session_state.nome}</b>!</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     usuario = st.session_state.usuario
 
-    # --- Lógica temporal para atrasos em agendamentos confirmados ---
-    for ag in AGENDAMENTOS:
-        if ag.get("status") == "Confirmado" and ag.get("confirmado_em"):
-            confirmado_em = datetime.strptime(ag["confirmado_em"], "%d/%m/%Y %H:%M")
-            if datetime.now() - confirmado_em > timedelta(hours=2):
-                # Verifica se já existe alerta para esse agendamento
-                alerta_existente = any(
-                    a for a in ALERTAS
-                    if a.get("tipo") == "Atraso" and a.get("agendamento_id") == id(ag) and a.get("status", "Ativo") == "Ativo"
-                )
-                if not alerta_existente:
-                    ALERTAS.append({
-                        "mensagem": f"Atraso na conclusão do agendamento do cliente {ag['cliente']} na doca {ag['doca']}",
-                        "doca": ag["doca"],
-                        "timestamp": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                        "status": "Ativo",
-                        "tipo": "Atraso",
-                        "agendamento_id": id(ag)
-                    })
+    # --- ALERTAS: busca do banco ---
+    alertas = buscar_alertas()
 
     # --- Lógica de conflito: gerar alerta ao detectar conflito em pendentes ---
-    for ag in AGENDAMENTOS:
+    ags_db = buscar_agendamentos()  # Busca todos os agendamentos do banco
+
+    for ag in ags_db:
         if ag["status"] == "Pendente":
             conflito = any(
-                a for a in AGENDAMENTOS
+                a for a in ags_db
                 if a is not ag and
-                   a["doca"] == ag["doca"] and
+                   a["doca_nome"] == ag["doca_nome"] and
                    a["data"] == ag["data"] and
                    a["hora"] == ag["hora"] and
                    a["status"] in ["Pendente", "Em Processamento", "Confirmado"]
             )
             alerta_existente = any(
-                a for a in ALERTAS
-                if a.get("tipo") == "Conflito" and a.get("agendamento_id") == id(ag) and a.get("status", "Ativo") == "Ativo"
+                a for a in alertas
+                if a.get("tipo") == "Conflito" and a.get("agendamento_id") == ag["id"] and a.get("status", "Ativo") == "Ativo"
             )
             if conflito and not alerta_existente:
-                ALERTAS.append({
-                    "mensagem": f"Conflito de agendamento para doca {ag['doca']} em {ag['data']} {ag['hora']}",
-                    "doca": ag["doca"],
-                    "timestamp": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                    "status": "Ativo",
-                    "tipo": "Conflito",
-                    "agendamento_id": id(ag)
-                })
+                # Cria alerta no banco usando doca_id
+                from database.db import criar_alerta
+                criar_alerta(
+                    mensagem=f"Conflito de agendamento para doca {ag['doca_nome']} em {ag['data']} {ag['hora']}",
+                    doca_id=ag["doca_id"],
+                    tipo="Conflito",
+                    agendamento_id=ag["id"]
+                )
 
     # Inicializa toggles na sessão
     if "show_agendamentos_gestor" not in st.session_state:
@@ -113,8 +108,6 @@ label, .stSelectbox > label {
         st.session_state.show_encomendas_gestor = False
     if "filtro_encomenda_status" not in st.session_state:
         st.session_state.filtro_encomenda_status = "Todas"
-
-    # Inicializa toggles para cada estado de agendamento
     if "show_ag_pendentes" not in st.session_state:
         st.session_state.show_ag_pendentes = False
     if "show_ag_processando" not in st.session_state:
@@ -133,11 +126,16 @@ label, .stSelectbox > label {
         st.session_state.show_agendamentos_gestor = not st.session_state.show_agendamentos_gestor
 
     if st.session_state.show_agendamentos_gestor:
+        ags_db = buscar_agendamentos()  # Busca todos os agendamentos do banco
+
+        # Buscar docas alocadas ao cliente de cada agendamento
+        alocacoes = buscar_alocacoes_docas()
+
         # Pendentes
         if st.button("Agendamentos Pendentes", key="btn_ag_pendentes"):
             st.session_state.show_ag_pendentes = not st.session_state.show_ag_pendentes
         if st.session_state.show_ag_pendentes:
-            for idx, ag in enumerate([a for a in AGENDAMENTOS if a["status"] == "Pendente"]):
+            for idx, ag in enumerate([a for a in ags_db if a["status"] == "Pendente"]):
                 st.markdown(f"""
 <div style="
     background: linear-gradient(90deg, #fff9e1 60%, #ffe082 100%);
@@ -155,8 +153,8 @@ label, .stSelectbox > label {
         <span style="vertical-align: middle;">⏳ Agendamento Pendente</span>
     </div>
     <div style="color: #222; font-size: 1.05rem; margin-bottom: 2px;">
-        <b>Cliente:</b> {ag['cliente']} &nbsp; | &nbsp;
-        <b>Doca:</b> {ag['doca']}
+        <b>Cliente:</b> {ag['usuario_nome']} &nbsp; | &nbsp;
+        <b>Doca:</b> {ag['doca_nome']}
     </div>
     <div style="color: #444; font-size: 0.98rem;">
         <b>Data:</b> {ag['data']} {ag['hora']} &nbsp; | &nbsp;
@@ -172,11 +170,10 @@ label, .stSelectbox > label {
 """, unsafe_allow_html=True)
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    # Aprovar só se não houver conflito
                     conflito = any(
-                        a for a in AGENDAMENTOS
+                        a for a in ags_db
                         if a is not ag and
-                           a["doca"] == ag["doca"] and
+                           a["doca_nome"] == ag["doca_nome"] and
                            a["data"] == ag["data"] and
                            a["hora"] == ag["hora"] and
                            a["status"] in ["Pendente", "Em Processamento", "Confirmado"]
@@ -185,13 +182,14 @@ label, .stSelectbox > label {
                         if conflito:
                             st.error("Não é possível aprovar: existe conflito de agendamento para esta doca, data e hora!")
                         else:
-                            ag["status"] = "Em Processamento"
-                            DOCAS[ag["doca"]]["status"] = "Em preparação"
+                            # Quando aprovar (Em Processamento)
+                            atualizar_agendamento_status(ag["id"], "Em Processamento")
+                            atualizar_status_doca(ag["doca_id"], "Em preparação")
                             st.success("Agendamento aprovado! Doca em preparação.")
                             st.rerun()
                 with col2:
                     if st.button("Cancelar", key=f"cancelar_p_{idx}"):
-                        ag["status"] = "Cancelado"
+                        atualizar_agendamento_status(ag["id"], "Cancelado")
                         st.warning("Agendamento cancelado!")
                         st.rerun()
                 with col3:
@@ -199,23 +197,49 @@ label, .stSelectbox > label {
                         st.session_state[f"show_reagendar_{idx}"] = not st.session_state.get(f"show_reagendar_{idx}", False)
                 if st.session_state.get(f"show_reagendar_{idx}", False):
                     with st.form(f"form_reagendar_{idx}"):
-                        nova_data = st.date_input("Nova data", value=datetime.strptime(ag["data"], "%d/%m/%Y"))
-                        nova_hora = st.time_input("Nova hora", value=datetime.strptime(ag["hora"], "%H:%M").time())
-                        nova_doca = st.selectbox("Nova doca", options=list(DOCAS.keys()), index=list(DOCAS.keys()).index(ag["doca"]))
-                        submit = st.form_submit_button("Salvar Reagendamento")
-                        if submit:
-                            ag["data"] = nova_data.strftime("%d/%m/%Y")
-                            ag["hora"] = nova_hora.strftime("%H:%M")
-                            ag["doca"] = nova_doca
-                            st.success("Agendamento reagendado!")
-                            st.session_state[f"show_reagendar_{idx}"] = False
-                            st.rerun()
+                        import datetime as dt
+                        data_val = ag["data"]
+                        if isinstance(data_val, str):
+                            try:
+                                data_val = dt.datetime.strptime(data_val, "%d/%m/%Y").date()
+                            except Exception:
+                                data_val = dt.date.today()
+                        elif isinstance(data_val, dt.datetime):
+                            data_val = data_val.date()
+                        elif not isinstance(data_val, dt.date):
+                            data_val = dt.date.today()
+                        hora_val = ag["hora"]
+                        if isinstance(hora_val, str):
+                            try:
+                                hora_val = dt.datetime.strptime(hora_val, "%H:%M").time()
+                            except Exception:
+                                hora_val = dt.datetime.now().time()
+                        elif isinstance(hora_val, dt.datetime):
+                            hora_val = hora_val.time()
+                        elif not isinstance(hora_val, dt.time):
+                            hora_val = dt.datetime.now().time()
+                        # Docas alocadas ao cliente deste agendamento
+                        docas_cliente = [d["doca_nome"] for d in alocacoes if d["usuario_id"] == ag["usuario_id"]]
+                        if not docas_cliente:
+                            st.warning("Este cliente não possui docas alocadas.")
+                        else:
+                            nova_data = st.date_input("Nova data", value=data_val)
+                            nova_hora = st.time_input("Nova hora", value=hora_val)
+                            nova_doca = st.selectbox("Nova doca", options=docas_cliente, index=docas_cliente.index(ag["doca_nome"]))
+                            submit = st.form_submit_button("Salvar Reagendamento")
+                            if submit:
+                                docas_db = buscar_docas()
+                                doca_id = next((d["id"] for d in docas_db if d["nome"] == nova_doca), None)
+                                atualizar_agendamento_doca_data_hora(ag["id"], doca_id, nova_data, nova_hora)
+                                st.success("Agendamento reagendado!")
+                                st.session_state[f"show_reagendar_{idx}"] = False
+                                st.rerun()
 
         # Em Processamento
         if st.button("Agendamentos em Processamento", key="btn_ag_processando"):
             st.session_state.show_ag_processando = not st.session_state.show_ag_processando
         if st.session_state.show_ag_processando:
-            for idx, ag in enumerate([a for a in AGENDAMENTOS if a["status"] == "Em Processamento"]):
+            for idx, ag in enumerate([a for a in ags_db if a["status"] == "Em Processamento"]):
                 st.markdown(f"""
 <div style="
     background: linear-gradient(90deg, #e3f2fd 60%, #90caf9 100%);
@@ -233,8 +257,8 @@ label, .stSelectbox > label {
         <span style="vertical-align: middle;">🔄 Em Processamento</span>
     </div>
     <div style="color: #222; font-size: 1.05rem; margin-bottom: 2px;">
-        <b>Cliente:</b> {ag['cliente']} &nbsp; | &nbsp;
-        <b>Doca:</b> {ag['doca']}
+        <b>Cliente:</b> {ag['usuario_nome']} &nbsp; | &nbsp;
+        <b>Doca:</b> {ag['doca_nome']}
     </div>
     <div style="color: #444; font-size: 0.98rem;">
         <b>Data:</b> {ag['data']} {ag['hora']} &nbsp; | &nbsp;
@@ -250,54 +274,65 @@ label, .stSelectbox > label {
 """, unsafe_allow_html=True)
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    # Confirmar
                     if st.button("Confirmar", key=f"confirmar_{idx}"):
-                        ag["status"] = "Confirmado"
-                        ag["confirmado_em"] = datetime.now().strftime("%d/%m/%Y %H:%M")
-                        DOCAS[ag["doca"]]["status"] = "Ocupada"
+                        # Quando confirmar
+                        atualizar_agendamento_status(ag["id"], "Confirmado")
+                        atualizar_status_doca(ag["doca_id"], "Ocupada")
                         st.success("Agendamento confirmado! Doca ocupada.")
                         st.rerun()
                 with col2:
-                    # Cancelar
                     if st.button("Cancelar", key=f"cancelar_e_{idx}"):
-                        ag["status"] = "Cancelado"
-                        # Atualiza encomendas relacionadas
-                        for encomenda in ENCOMENDAS:
-                            if encomenda.get("agendamento_idx") == idx and encomenda["status"] == "Em Processamento":
-                                encomenda["status"] = "Pendente"
-                                encomenda["agendamento_idx"] = None
-                                if "historico" not in encomenda:
-                                    encomenda["historico"] = []
-                                encomenda["historico"].append({
-                                    "acao": "Desalocada automaticamente ao cancelar agendamento",
-                                    "data": datetime.now().strftime("%d/%m/%Y %H:%M")
-                                })
+                        atualizar_agendamento_status(ag["id"], "Cancelado")
                         st.warning("Agendamento cancelado!")
                         st.rerun()
                 with col3:
-                    # Reagendar
                     if st.button("Reagendar", key=f"reagendar_e_{idx}"):
                         st.session_state[f"show_reagendar_e_{idx}"] = not st.session_state.get(f"show_reagendar_e_{idx}", False)
                 if st.session_state.get(f"show_reagendar_e_{idx}", False):
                     with st.form(f"form_reagendar_e_{idx}"):
-                        nova_data = st.date_input("Nova data", value=datetime.strptime(ag["data"], "%d/%m/%Y"))
-                        nova_hora = st.time_input("Nova hora", value=datetime.strptime(ag["hora"], "%H:%M").time())
-                        nova_doca = st.selectbox("Nova doca", options=list(DOCAS.keys()), index=list(DOCAS.keys()).index(ag["doca"]))
-                        submit = st.form_submit_button("Salvar Reagendamento")
-                        if submit:
-                            ag["data"] = nova_data.strftime("%d/%m/%Y")
-                            ag["hora"] = nova_hora.strftime("%H:%M")
-                            ag["doca"] = nova_doca
-                            ag["status"] = "Pendente"
-                            st.success("Agendamento reagendado e voltou para Pendente!")
-                            st.session_state[f"show_reagendar_e_{idx}"] = False
-                            st.rerun()
+                        import datetime as dt
+                        data_val = ag["data"]
+                        if isinstance(data_val, str):
+                            try:
+                                data_val = dt.datetime.strptime(data_val, "%d/%m/%Y").date()
+                            except Exception:
+                                data_val = dt.date.today()
+                        elif isinstance(data_val, dt.datetime):
+                            data_val = data_val.date()
+                        elif not isinstance(data_val, dt.date):
+                            data_val = dt.date.today()
+                        hora_val = ag["hora"]
+                        if isinstance(hora_val, str):
+                            try:
+                                hora_val = dt.datetime.strptime(hora_val, "%H:%M").time()
+                            except Exception:
+                                hora_val = dt.datetime.now().time()
+                        elif isinstance(hora_val, dt.datetime):
+                            hora_val = hora_val.time()
+                        elif not isinstance(hora_val, dt.time):
+                            hora_val = dt.datetime.now().time()
+                        # Docas alocadas ao cliente deste agendamento
+                        docas_cliente = [d["doca_nome"] for d in alocacoes if d["usuario_id"] == ag["usuario_id"]]
+                        if not docas_cliente:
+                            st.warning("Este cliente não possui docas alocadas.")
+                        else:
+                            nova_data = st.date_input("Nova data", value=data_val)
+                            nova_hora = st.time_input("Nova hora", value=hora_val)
+                            nova_doca = st.selectbox("Nova doca", options=docas_cliente, index=docas_cliente.index(ag["doca_nome"]))
+                            submit = st.form_submit_button("Salvar Reagendamento")
+                            if submit:
+                                docas_db = buscar_docas()
+                                doca_id = next((d["id"] for d in docas_db if d["nome"] == nova_doca), None)
+                                atualizar_agendamento_doca_data_hora(ag["id"], doca_id, nova_data, nova_hora)
+                                st.success("Agendamento reagendado!")
+                                st.session_state[f"show_reagendar_e_{idx}"] = False
+                                st.rerun()
 
         # Confirmados
         if st.button("Agendamentos Confirmados", key="btn_ag_confirmados"):
             st.session_state.show_ag_confirmados = not st.session_state.show_ag_confirmados
         if st.session_state.show_ag_confirmados:
-            for idx, ag in enumerate([a for a in AGENDAMENTOS if a["status"] == "Confirmado"]):
+            for idx, ag in enumerate([a for a in ags_db if a["status"] == "Confirmado"]):
                 st.markdown(f"""
 <div style="
     background: linear-gradient(90deg, #e0f7fa 60%, #80deea 100%);
@@ -315,8 +350,8 @@ label, .stSelectbox > label {
         <span style="vertical-align: middle;">📅 Agendamento Confirmado</span>
     </div>
     <div style="color: #222; font-size: 1.05rem; margin-bottom: 2px;">
-        <b>Cliente:</b> {ag['cliente']} &nbsp; | &nbsp;
-        <b>Doca:</b> {ag['doca']}
+        <b>Cliente:</b> {ag['usuario_nome']} &nbsp; | &nbsp;
+        <b>Doca:</b> {ag['doca_nome']}
     </div>
     <div style="color: #444; font-size: 0.98rem;">
         <b>Data:</b> {ag['data']} {ag['hora']} &nbsp; | &nbsp;
@@ -333,37 +368,19 @@ label, .stSelectbox > label {
                 col1, col2 = st.columns(2)
                 with col1:
                     if st.button("Concluir", key=f"concluir_{idx}"):
-                        ag["status"] = "Concluído"
-                        ag["finalizado_em"] = datetime.now().strftime("%d/%m/%Y %H:%M")
-                        # Atualiza encomendas relacionadas
-                        for encomenda in ENCOMENDAS:
-                            if encomenda.get("agendamento_idx") == idx and encomenda["status"] == "Em Processamento":
-                                encomenda["status"] = "Processada"
-                                if "historico" not in encomenda:
-                                    encomenda["historico"] = []
-                                encomenda["historico"].append({
-                                    "acao": "Processada ao concluir agendamento pelo gestor",
-                                    "data": datetime.now().strftime("%d/%m/%Y %H:%M")
-                                })
-                        # Libera a doca se não houver outro agendamento confirmado ou em processamento para ela
-                        doca_id = ag["doca"]
-                        outros_agendamentos = [
-                            a for a in AGENDAMENTOS
-                            if a["doca"] == doca_id and a["status"] in ["Confirmado", "Em Processamento"] and a is not ag
-                        ]
-                        if not outros_agendamentos:
-                            DOCAS[doca_id]["status"] = "Livre"
+                        # Quando concluir
+                        atualizar_agendamento_status(ag["id"], "Concluído")
+                        atualizar_status_doca(ag["doca_id"], "Livre")
                         st.success("Agendamento concluído e doca liberada!")
                         st.rerun()
                 with col2:
-                    # (Opcional: mostrar detalhes, histórico, etc.)
                     pass
 
         # Concluídos
         if st.button("Agendamentos Concluídos", key="btn_ag_concluidos"):
-            st.session_state.show_ag_concluidos = not st.session_state.get("show_ag_concluidos", False)
-        if st.session_state.get("show_ag_concluidos", False):
-            for ag in [a for a in AGENDAMENTOS if a["status"] == "Concluído"]:
+            st.session_state.show_ag_concluidos = not st.session_state.show_ag_concluidos
+        if st.session_state.show_ag_concluidos:
+            for ag in [a for a in ags_db if a["status"] == "Concluído"]:
                 st.markdown(f"""
 <div style="
     background: linear-gradient(90deg, #e8f5e9 60%, #a5d6a7 100%);
@@ -381,8 +398,8 @@ label, .stSelectbox > label {
         <span style="vertical-align: middle;">✅ Agendamento Concluído</span>
     </div>
     <div style="color: #222; font-size: 1.05rem; margin-bottom: 2px;">
-        <b>Cliente:</b> {ag['cliente']} &nbsp; | &nbsp;
-        <b>Doca:</b> {ag['doca']}
+        <b>Cliente:</b> {ag['usuario_nome']} &nbsp; | &nbsp;
+        <b>Doca:</b> {ag['doca_nome']}
     </div>
     <div style="color: #444; font-size: 0.98rem;">
         <b>Data:</b> {ag['data']} {ag['hora']} &nbsp; | &nbsp;
@@ -401,7 +418,7 @@ label, .stSelectbox > label {
         if st.button("Agendamentos Cancelados", key="btn_ag_cancelados"):
             st.session_state.show_ag_cancelados = not st.session_state.show_ag_cancelados
         if st.session_state.show_ag_cancelados:
-            for ag in [a for a in AGENDAMENTOS if a["status"] == "Cancelado"]:
+            for ag in [a for a in ags_db if a["status"] == "Cancelado"]:
                 st.markdown(f"""
 <div style="
     background: linear-gradient(90deg, #ffebee 60%, #ffcdd2 100%);
@@ -419,8 +436,8 @@ label, .stSelectbox > label {
         <span style="vertical-align: middle;">❌ Agendamento Cancelado</span>
     </div>
     <div style="color: #222; font-size: 1.05rem; margin-bottom: 2px;">
-        <b>Cliente:</b> {ag['cliente']} &nbsp; | &nbsp;
-        <b>Doca:</b> {ag['doca']}
+        <b>Cliente:</b> {ag['usuario_nome']} &nbsp; | &nbsp;
+        <b>Doca:</b> {ag['doca_nome']}
     </div>
     <div style="color: #444; font-size: 0.98rem;">
         <b>Data:</b> {ag['data']} {ag['hora']} &nbsp; | &nbsp;
@@ -435,36 +452,33 @@ label, .stSelectbox > label {
 </div>
 """, unsafe_allow_html=True)
 
-    # Botão toggle para gestão de docas (substitui o antigo "Ver Docas")
+    # Botão toggle para gestão de docas
     if st.button("🛠️ Gestão de Docas", key="btn_gestao_docas"):
         st.session_state.show_gestao_docas = not st.session_state.get("show_gestao_docas", False)
 
     if st.session_state.get("show_gestao_docas", False):
         st.markdown(
-        '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Gestão de Docas: Status e Alocação de Clientes</h3>',
-        unsafe_allow_html=True
-    )
+            '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Gestão de Docas: Status e Alocação de Clientes</h3>',
+            unsafe_allow_html=True
+        )
 
-        # Inicializa estrutura de alocação se não existir
-        if "alocacoes_docas" not in st.session_state:
-            st.session_state.alocacoes_docas = {doca: [] for doca in DOCAS}
-            for cliente, info in CLIENTES.items():
-                for doca in info["docas"]:
-                    if doca in st.session_state.alocacoes_docas:
-                        st.session_state.alocacoes_docas[doca].append(cliente)
+        docas = buscar_docas()
+        clientes = buscar_clientes()
+        alocacoes = buscar_alocacoes_docas()
 
-        st.markdown(
-        '<h3 style="color:#d0e4f7; font-weight:50; letter-spacing:0.5px; margin-bottom:0.5px;">Altere as alocações conforme necessário:</h3>',
-        unsafe_allow_html=True
-    )
+        doca_id_para_clientes = {}
+        for doca in docas:
+            doca_id_para_clientes[doca["id"]] = [
+                a["usuario_nome"] for a in alocacoes if a["doca_id"] == doca["id"]
+            ]
 
-        for doca, info in DOCAS.items():
+        for doca in docas:
             cor_borda, cor_grad1, cor_grad2, cor_status, icone, status_legenda = {
                 "Livre": ("#388e3c", "#e8f5e9", "#a5d6a7", "#388e3c", "🟢", "Livre"),
                 "Ocupada": ("#1976d2", "#e3f2fd", "#90caf9", "#1976d2", "🔵", "Ocupada"),
                 "Em preparação": ("#b28704", "#fff9e1", "#ffe082", "#b28704", "🟡", "Em preparação"),
-            }[info["status"]]
-            clientes_alocados = st.session_state.alocacoes_docas.get(doca, [])
+            }.get(doca["status"], ("#b0bec5", "#eceff1", "#b0bec5", "#78909c", "❔", doca["status"]))
+            clientes_alocados = doca_id_para_clientes.get(doca["id"], [])
             st.markdown(f"""
             <div style="
                 background: linear-gradient(90deg, {cor_grad1} 60%, {cor_grad2} 100%);
@@ -479,7 +493,7 @@ label, .stSelectbox > label {
             ">
               <div>
                 <div style="font-size: 1.08rem; color: {cor_status}; font-weight: 700; margin-bottom: 2px;">
-                    <span style="vertical-align: middle;">{icone} Doca {doca}</span>
+                    <span style="vertical-align: middle;">{icone} Doca {doca['nome']}</span>
                 </div>
                 <div style="color: #444; font-size: 0.98rem;">
                     <b>Status:</b> <span style="color:{cor_status};">{status_legenda}</span>
@@ -491,49 +505,36 @@ label, .stSelectbox > label {
             </div>
             """, unsafe_allow_html=True)
 
-            # Selecionar cliente para alocar
-            clientes_disponiveis = [c for c in CLIENTES if c not in clientes_alocados]
+            clientes_disponiveis = [c for c in clientes if c["nome"] not in clientes_alocados]
             col1, col2 = st.columns(2)
             with col1:
                 cliente_sel = st.selectbox(
-                    f"Selecionar cliente para alocar na doca {doca}",
-                    options=[""] + clientes_disponiveis,
-                    key=f"select_cliente_{doca}"
+                    f"Selecionar cliente para alocar na doca {doca['nome']}",
+                    options=[""] + [c["nome"] for c in clientes_disponiveis],
+                    key=f"select_cliente_{doca['id']}"
                 )
                 if cliente_sel:
-                    if st.button(f"Alocar {cliente_sel} em {doca}", key=f"alocar_{cliente_sel}_{doca}"):
-                        st.session_state.alocacoes_docas[doca].append(cliente_sel)
-                        st.success(f"Cliente {cliente_sel} alocado em {doca}.")
+                    usuario_id = next((c["id"] for c in clientes if c["nome"] == cliente_sel), None)
+                    if usuario_id and st.button(f"Alocar {cliente_sel} em {doca['nome']}", key=f"alocar_{cliente_sel}_{doca['id']}"):
+                        alocar_doca_cliente(doca["id"], usuario_id)
+                        st.success(f"Cliente {cliente_sel} alocado em {doca['nome']}.")
                         st.rerun()
             with col2:
                 if clientes_alocados:
                     cliente_remover = st.selectbox(
-                        f"Remover cliente da doca {doca}",
+                        f"Remover cliente da doca {doca['nome']}",
                         options=[""] + clientes_alocados,
-                        key=f"remover_cliente_{doca}"
+                        key=f"remover_cliente_{doca['id']}"
                     )
                     if cliente_remover:
-                        if st.button(f"Remover {cliente_remover} de {doca}", key=f"remover_{cliente_remover}_{doca}"):
-                            st.session_state.alocacoes_docas[doca].remove(cliente_remover)
-                            st.warning(f"Cliente {cliente_remover} removido de {doca}.")
+                        usuario_id = next((c["id"] for c in clientes if c["nome"] == cliente_remover), None)
+                        if usuario_id and st.button(f"Remover {cliente_remover} de {doca['nome']}", key=f"remover_{cliente_remover}_{doca['id']}"):
+                            desalocar_doca_cliente(doca["id"], usuario_id)
+                            st.warning(f"Cliente {cliente_remover} removido de {doca['nome']}.")
                             st.rerun()
             st.divider()
 
-    # Sincroniza status das docas com os agendamentos mais recentes
-    for doca_id in DOCAS.keys():
-        ags_doca = [a for a in AGENDAMENTOS if a["doca"] == doca_id]
-        ags_doca.sort(key=lambda x: (x["data"], x["hora"]), reverse=True)
-        for ag in ags_doca:
-            if ag["status"] == "Confirmado":
-                DOCAS[doca_id]["status"] = "Ocupada"
-                break
-            elif ag["status"] == "Em Processamento":
-                DOCAS[doca_id]["status"] = "Em preparação"
-                break
-        else:
-            DOCAS[doca_id]["status"] = "Livre"  # Sempre define como Livre se não houver agendamento relevant
-
-    # Botão toggle para encomendas (coloque antes do rodapé e botão sair)
+    # Botão toggle para encomendas
     if st.button("📦 Ver Encomendas", key="btn_encomendas_gestor"):
         st.session_state.show_encomendas_gestor = not st.session_state.show_encomendas_gestor
 
@@ -549,10 +550,13 @@ label, .stSelectbox > label {
             index=status_options.index(st.session_state.filtro_encomenda_status),
             key="filtro_encomenda_status_select"
         )
+        encomendas_db = buscar_encomendas()
+        # Buscar nomes dos clientes para cada encomenda
+        usuarios = {u["id"]: u["nome"] for u in buscar_clientes()}
         if st.session_state.filtro_encomenda_status == "Todas":
-            encomendas_filtradas = ENCOMENDAS
+            encomendas_filtradas = encomendas_db
         else:
-            encomendas_filtradas = [e for e in ENCOMENDAS if e["status"] == st.session_state.filtro_encomenda_status]
+            encomendas_filtradas = [e for e in encomendas_db if e["status"] == st.session_state.filtro_encomenda_status]
 
         if not encomendas_filtradas:
             st.info("Nenhuma encomenda encontrada para o filtro selecionado.")
@@ -566,6 +570,8 @@ label, .stSelectbox > label {
                 }[encomenda["status"]]
 
                 cancelar_key = f"cancelar_gestor_{encomenda['id']}"
+
+                cliente_nome = usuarios.get(encomenda["usuario_id"], "Desconhecido")
 
                 st.markdown(f"""
                 <div style="
@@ -585,7 +591,7 @@ label, .stSelectbox > label {
                     </div>
                     <div style="color: #222; font-size: 1.05rem; margin-bottom: 2px;">
                         <b>ID:</b> {encomenda['id']} &nbsp; | &nbsp;
-                        <b>Cliente:</b> {encomenda['cliente']}
+                        <b>Cliente:</b> {cliente_nome}
                     </div>
                     <div style="color: #444; font-size: 0.98rem;">
                         <b>Descrição:</b> {encomenda['descricao']}
@@ -593,9 +599,6 @@ label, .stSelectbox > label {
                     <div style="color: #444; font-size: 0.98rem;">
                         <b>Status:</b> <span style="color:{cor_status};">{encomenda['status']}</span>
                     </div>
-                    {"<div style='color:#444;font-size:0.98rem;'><b>Agendamento:</b> " +
-                        f"{AGENDAMENTOS[encomenda['agendamento_idx']]['data']} {AGENDAMENTOS[encomenda['agendamento_idx']]['hora']} | Doca {AGENDAMENTOS[encomenda['agendamento_idx']]['doca']} | Status: {AGENDAMENTOS[encomenda['agendamento_idx']]['status']}" +
-                        "</div>" if encomenda.get("agendamento_idx") is not None else ""}
                   </div>
                   <div style="text-align: right;">
                     <span style="background:{cor_status}22; color:{cor_status}; padding:6px 14px; border-radius:8px; font-weight:700; font-size:0.95rem;">
@@ -608,22 +611,9 @@ label, .stSelectbox > label {
                 # Botão funcional de cancelar encomenda (apenas se Pendente ou Em Processamento)
                 if encomenda["status"] in ["Pendente", "Em Processamento"]:
                     if st.button("Cancelar", key=cancelar_key):
-                        encomenda["status"] = "Cancelada"
-                        encomenda["agendamento_idx"] = None
-                        if "historico" not in encomenda:
-                            encomenda["historico"] = []
-                        encomenda["historico"].append({
-                            "acao": "Cancelada pelo gestor",
-                            "data": datetime.now().strftime("%d/%m/%Y %H:%M")
-                        })
+                        cancelar_encomenda(encomenda["id"])
                         st.warning("Encomenda cancelada!")
                         st.rerun()
-
-                # Histórico da encomenda
-                if "historico" in encomenda and encomenda["historico"]:
-                    with st.expander("Histórico da Encomenda"):
-                        for h in encomenda["historico"]:
-                            st.markdown(f"- {h['acao']} em {h['data']}")
 
     # Painel de alertas
     if st.button("⚠️ Ver Alertas", key="btn_alertas_gestor"):
@@ -636,8 +626,8 @@ label, .stSelectbox > label {
         '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Painel de Alertas Gerais</h3>',
         unsafe_allow_html=True
     )
-        for idx, alerta in enumerate([a for a in ALERTAS if a.get("status", "Ativo") == "Ativo"]):
-            cor_borda = "#d32f2f"  # Vermelho forte para todos os alertas
+        for idx, alerta in enumerate([a for a in alertas if a.get("status", "Ativo") == "Ativo"]):
+            cor_borda = "#d32f2f"
             cor_grad1 = "#ffebee"
             cor_grad2 = "#ffcdd2"
             icone = "⏰" if alerta.get("tipo") == "Atraso" else "⚠️"
@@ -662,7 +652,7 @@ label, .stSelectbox > label {
                         <span style="vertical-align: middle;">{icone} {alerta['mensagem']}</span>
                     </div>
                     <div style="color: #555; font-size: 0.97rem;">
-                        <b>Doca:</b> {alerta['doca']} &nbsp; | &nbsp; <b>Data:</b> {alerta['timestamp']}
+                        <b>Doca:</b> {alerta.get('doca_nome', 'N/A')} &nbsp; | &nbsp; <b>Data:</b> {alerta['timestamp']}
                     </div>
                   </div>
                   <div style="text-align: right;">
@@ -674,9 +664,7 @@ label, .stSelectbox > label {
                 """, unsafe_allow_html=True)
             with col2:
                 if st.button("Resolver", key=resolver_key):
-                    alerta["status"] = "Resolvido"
-                    alerta["resolvido_por"] = f"Gestor ({usuario})"
-                    alerta["resolvido_em"] = datetime.now().strftime("%d/%m/%Y %H:%M")
+                    resolver_alerta(alerta["id"], usuario)
                     st.success("Alerta resolvido!")
                     st.rerun()
 
@@ -689,20 +677,19 @@ label, .stSelectbox > label {
         '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Alertas Resolvidos</h3>',
         unsafe_allow_html=True
     )
-            for alerta in [a for a in ALERTAS if a.get("status", "Ativo") == "Resolvido"]:
+            for alerta in [a for a in alertas if a.get("status", "Ativo") == "Resolvido"]:
                 resolvido_por = alerta.get("resolvido_por", "Desconhecido")
                 resolvido_em = alerta.get("resolvido_em", "Data desconhecida")
                 st.markdown(
                     f"""
                     <div style="background-color:#e1f5fe;padding:10px;border-radius:5px;margin-bottom:8px;">
-                        <b>{alerta['mensagem']}</b> (Doca {alerta['doca']}) - {alerta['timestamp']}<br>
+                        <b>{alerta['mensagem']}</b> (Doca {alerta.get('doca_nome', 'N/A')}) - {alerta['timestamp']}<br>
                         <small>Resolvido por: {resolvido_por} em {resolvido_em}</small>
                     </div>
                     """,
                     unsafe_allow_html=True
                 )
 
-# Painel de Métricas/KPIs
     if "show_metricas_gestor" not in st.session_state:
         st.session_state.show_metricas_gestor = False
 
@@ -714,7 +701,7 @@ label, .stSelectbox > label {
 
     st.divider()
     st.markdown(
-    f'<div style="color:#90caf9; font-size:0.98rem; margin-top:24px; text-align:right;">Utilizador: <b>ID:</b> {usuario} &nbsp;|&nbsp; <b>Email:</b> {usuario}@cliente.smid</div>',
+    f'<div style="color:#90caf9; font-size:0.98rem; margin-top:24px; text-align:right;">Utilizador: <b>ID:</b> {st.session_state.nome} &nbsp;|&nbsp; <b>Email:</b> {usuario}</div>',
     unsafe_allow_html=True
 )
 
@@ -722,22 +709,20 @@ label, .stSelectbox > label {
         st.session_state.logado = False
         st.rerun()
 
-# Painel de Métricas/KPIs
 def painel_metricas():
     st.markdown(
         '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">📈 Painel de Métricas / KPIs:</h3>',
         unsafe_allow_html=True
     )
 
-    # DataFrame dos agendamentos
-    df = pd.DataFrame(AGENDAMENTOS)
+    ags = buscar_agendamentos()
+    df = pd.DataFrame(ags)
 
-    # Tempo médio de ocupação das docas (apenas agendamentos concluídos)
     if not df.empty and "confirmado_em" in df.columns and "finalizado_em" in df.columns:
         df_concluidos = df[(df["status"] == "Concluído") & df["confirmado_em"].notnull() & df["finalizado_em"].notnull()].copy()
         if not df_concluidos.empty:
-            df_concluidos["confirmado_em"] = pd.to_datetime(df_concluidos["confirmado_em"], format="%d/%m/%Y %H:%M")
-            df_concluidos["finalizado_em"] = pd.to_datetime(df_concluidos["finalizado_em"], format="%d/%m/%Y %H:%M")
+            df_concluidos["confirmado_em"] = pd.to_datetime(df_concluidos["confirmado_em"])
+            df_concluidos["finalizado_em"] = pd.to_datetime(df_concluidos["finalizado_em"])
             df_concluidos["duracao"] = (df_concluidos["finalizado_em"] - df_concluidos["confirmado_em"]).dt.total_seconds() / 3600
             tempo_medio = df_concluidos["duracao"].mean()
             st.metric("Tempo médio de ocupação (h)", f"{tempo_medio:.2f}" if tempo_medio else "N/A")
@@ -746,7 +731,6 @@ def painel_metricas():
     else:
         st.metric("Tempo médio de ocupação (h)", "N/A")
 
-    # Número de agendamentos por status
     if not df.empty and "status" in df.columns:
         status_counts = df["status"].value_counts()
         st.markdown(
@@ -757,20 +741,19 @@ def painel_metricas():
     else:
         st.write("Nenhum agendamento cadastrado.")
 
-    # Quantidade de atrasos
-    atrasos = [a for a in ALERTAS if a.get("tipo") == "Atraso" and a.get("status") == "Ativo"]
+    # Corrigido: buscar alertas do banco, não de ALERTAS em memória
+    alertas = buscar_alertas()
+    atrasos = [a for a in alertas if a.get("tipo") == "Atraso" and a.get("status") == "Ativo"]
     st.metric("Agendamentos em atraso", len(atrasos))
 
-    # Utilização de cada doca
-    if not df.empty and "doca" in df.columns:
-        doca_counts = df["doca"].value_counts()
+    if not df.empty and "doca_nome" in df.columns:
+        doca_counts = df["doca_nome"].value_counts()
         st.markdown(
         '<h3 style="color:#d0e4f7; font-weight:200; letter-spacing:0.5px; margin-bottom:2px;">Utilização de cada doca:</h3>',
         unsafe_allow_html=True
     )
         st.dataframe(doca_counts.rename_axis('Doca').reset_index(name='Quantidade'))
 
-    # Exportar relatório
     st.markdown(
         '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Exportar Relatório de Agendamentos</h3>',
         unsafe_allow_html=True

@@ -1,6 +1,16 @@
 import streamlit as st
 from utils.auth import verificar_autenticacao
-from utils.dados import DOCAS, AGENDAMENTOS, ENCOMENDAS, ALERTAS
+from database.db import (
+    buscar_docas,
+    buscar_encomendas,
+    buscar_agendamentos,
+    buscar_clientes,
+    buscar_alertas,
+    resolver_alerta,
+    atualizar_agendamento_status,
+    atualizar_encomenda_status,
+    atualizar_status_doca,  # <-- Adicione este import
+)
 from datetime import datetime
 
 def render():
@@ -53,7 +63,7 @@ def render():
         <div style="font-size:2.5rem;">🛠️</div>
         <div>
             <h1 style="color:#1976d2; font-weight:800; letter-spacing:1px; margin-bottom:8px; margin-top:0;">Dashboard do Operador</h1>
-            <span style="color:#222; font-size:1.13rem;">Bem-vindo, <b>{usuario}</b>!</span>
+            <span style="color:#222; font-size:1.13rem;">Bem-vindo, <b>{st.session_state.nome}</b>!</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -79,10 +89,14 @@ def render():
             '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Encomendas em Agendamentos Ativos</h3>',
             unsafe_allow_html=True
         )
+        encomendas_db = buscar_encomendas()
+        agendamentos_db = buscar_agendamentos()
+        clientes_db = {c["id"]: c["nome"] for c in buscar_clientes()}
+        # Filtra encomendas vinculadas a agendamentos ativos
         encomendas_ativas = [
-            e for e in ENCOMENDAS
-            if e.get("agendamento_idx") is not None and
-               AGENDAMENTOS[e["agendamento_idx"]]["status"] in ["Em Processamento", "Confirmado"]
+            e for e in encomendas_db
+            if e.get("agendamento_id") is not None and
+               next((ag for ag in agendamentos_db if ag["id"] == e["agendamento_id"] and ag["status"] in ["Em Processamento", "Confirmado"]), None)
         ]
         if not encomendas_ativas:
             st.markdown(
@@ -92,7 +106,8 @@ def render():
             st.divider()       
         else:
             for encomenda in encomendas_ativas:
-                ag = AGENDAMENTOS[encomenda["agendamento_idx"]]
+                ag = next(ag for ag in agendamentos_db if ag["id"] == encomenda["agendamento_id"])
+                cliente_nome = clientes_db.get(encomenda["usuario_id"], "Desconhecido")
                 cor_borda, cor_grad1, cor_grad2, cor_status, icone, status_legenda = {
                     "Pendente":   ("#b28704", "#fff9e1", "#ffe082", "#b28704", "📦", "Pendente"),
                     "Em Processamento": ("#1976d2", "#e3f2fd", "#90caf9", "#1976d2", "🔄", "Em Processamento"),
@@ -117,7 +132,7 @@ def render():
         <span style="vertical-align: middle;">{icone} Encomenda {status_legenda}</span>
     </div>
     <div style="color: #222; font-size: 1.05rem; margin-bottom: 2px;">
-        <b>ID:</b> {encomenda['id']} &nbsp; <b>Cliente:</b> {encomenda['cliente']}
+        <b>ID:</b> {encomenda['id']} &nbsp; <b>Cliente:</b> {cliente_nome}
     </div>
     <div style="color: #444; font-size: 0.98rem;">
         <b>Descrição:</b> {encomenda['descricao']}
@@ -126,11 +141,8 @@ def render():
         <b>Status:</b> <span style="color:{cor_status};">{encomenda['status']}</span>
     </div>
     <div style="color: #444; font-size: 0.98rem;">
-        <b>Agendamento:</b> {ag['data']} {ag['hora']} | Doca {ag['doca']} | Status: {ag['status']}
+        <b>Agendamento:</b> {ag['data']} {ag['hora']} | Doca {ag['doca_nome']} | Status: {ag['status']}
     </div>
-    {"<div style='color:#444;font-size:0.98rem;'><b>Histórico:</b><ul style='margin:0;padding-left:18px;'>" +
-        "".join([f"<li>{h['acao']} em {h['data']}</li>" for h in encomenda.get('historico', [])]) +
-        "</ul></div>" if encomenda.get("historico") else ""}
   </div>
   <div style="text-align: right;">
     <span style="background:{cor_status}22; color:{cor_status}; padding:6px 14px; border-radius:8px; font-weight:700; font-size:0.95rem;">
@@ -146,8 +158,9 @@ def render():
                     and ag["status"] == "Confirmado"
                 ):
                     if st.button("Concluir", key=f"concluir_{encomenda['id']}"):
-                        ag["status"] = "Concluído"
-                        encomenda["status"] = "Processada"
+                        atualizar_agendamento_status(ag["id"], "Concluído")
+                        atualizar_encomenda_status(encomenda["id"], "Processada")
+                        atualizar_status_doca(ag["doca_id"], "Livre")  # <-- Atualiza doca para Livre
                         st.success("Encomenda e agendamento concluídos!")
                         st.rerun()
                 st.divider()
@@ -161,7 +174,8 @@ def render():
             '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Status das Docas</h3>',
             unsafe_allow_html=True
         )
-        for doca_id, doca in DOCAS.items():
+        docas = buscar_docas()
+        for doca in docas:
             cor_borda, cor_grad1, cor_grad2, cor_status, icone, status_legenda = {
                 "Livre": ("#388e3c", "#e8f5e9", "#a5d6a7", "#388e3c", "🟢", "Livre"),
                 "Ocupada": ("#1976d2", "#e3f2fd", "#90caf9", "#1976d2", "🔵", "Ocupada"),
@@ -181,7 +195,7 @@ def render():
 ">
   <div>
     <div style="font-size: 1.08rem; color: {cor_status}; font-weight: 700; margin-bottom: 2px;">
-        <span style="vertical-align: middle;">{icone} Doca {doca_id}</span>
+        <span style="vertical-align: middle;">{icone} Doca {doca['nome']}</span>
     </div>
     <div style="color: #444; font-size: 0.98rem;">
         <b>Status:</b> <span style="color:{cor_status};">{status_legenda}</span>
@@ -201,7 +215,8 @@ def render():
             '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Painel de Alertas Gerais</h3>',
             unsafe_allow_html=True
         )
-        for idx, alerta in enumerate([a for a in ALERTAS if a.get("status", "Ativo") == "Ativo"]):
+        alertas = buscar_alertas()
+        for idx, alerta in enumerate([a for a in alertas if a.get("status", "Ativo") == "Ativo"]):
             cor_borda = "#d32f2f"
             st.markdown(f"""
 <div style="
@@ -217,7 +232,7 @@ def render():
 ">
   <div>
     <div style="font-size: 1.08rem; color: {cor_borda}; font-weight: 700; margin-bottom: 2px;">
-        ⚠️ {alerta['mensagem']} (Doca {alerta['doca']}) - {alerta['timestamp']}
+        ⚠️ {alerta['mensagem']} (Doca {alerta.get('doca_nome', 'N/A')}) - {alerta['timestamp']}
     </div>
   </div>
   <div>
@@ -228,9 +243,7 @@ def render():
             # Botão real para resolver alerta (fora do HTML)
             if alerta.get("tipo") != "Conflito":
                 if st.button("Resolver", key=f"resolver_alerta_op_{idx}"):
-                    alerta["status"] = "Resolvido"
-                    alerta["resolvido_por"] = f"Operador ({usuario})"
-                    alerta["resolvido_em"] = datetime.now().strftime("%d/%m/%Y %H:%M")
+                    resolver_alerta(alerta["id"], usuario)
                     st.success("Alerta resolvido!")
                     st.rerun()
         st.divider()
@@ -243,13 +256,13 @@ def render():
                 '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Alertas Resolvidos</h3>',
                 unsafe_allow_html=True
             )
-            for alerta in [a for a in ALERTAS if a.get("status", "Ativo") == "Resolvido"]:
+            for alerta in [a for a in alertas if a.get("status", "Ativo") == "Resolvido"]:
                 resolvido_por = alerta.get("resolvido_por", "Desconhecido")
                 resolvido_em = alerta.get("resolvido_em", "Data desconhecida")
                 st.markdown(
                     f"""
 <div style="background: linear-gradient(90deg, #e1f5fe 60%, #b3e5fc 100%);padding:10px 18px;border-radius:8px;margin-bottom:8px;border-left:5px solid #1976d2;">
-    <b>{alerta['mensagem']}</b> (Doca {alerta['doca']}) - {alerta['timestamp']}<br>
+    <b>{alerta['mensagem']}</b> (Doca {alerta.get('doca_nome', 'N/A')}) - {alerta['timestamp']}<br>
     <small>Resolvido por: {resolvido_por} em {resolvido_em}</small>
 </div>
 """,
@@ -258,7 +271,7 @@ def render():
 
     st.divider()
     st.markdown(
-        f'<div style="color:#90caf9; font-size:0.98rem; margin-top:24px; text-align:right;">Utilizador: <b>ID:</b> {usuario} &nbsp;|&nbsp; <b>Email:</b> {usuario}@operator.smid</div>',
+        f'<div style="color:#90caf9; font-size:0.98rem; margin-top:24px; text-align:right;">Utilizador: <b>ID:</b> {st.session_state.nome} &nbsp;|&nbsp; <b>Email:</b> {usuario}</div>',
         unsafe_allow_html=True
     )
 

@@ -25,22 +25,26 @@ hide_menu = """
 """
 st.markdown(hide_menu, unsafe_allow_html=True)
 
-import pandas as pd
-from pathlib import Path
 from dashboards import cliente, gestor, operador
+from database.db import get_connection
 
-USERS_FILE = Path("data/seed_usuarios.csv")
-
-def autenticar(username, senha):
-    if USERS_FILE.exists():
-        df = pd.read_csv(USERS_FILE)
-        user = df[(df["username"] == username) & (df["senha"] == senha)]
-        if not user.empty:
-            info = user.iloc[0]
-            st.session_state.logado = True
-            st.session_state.usuario = info["username"]
-            st.session_state.tipo = info["tipo"]
-            return True
+def autenticar(email, senha):
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(
+        "SELECT * FROM usuarios WHERE email=%s AND senha=%s",
+        (email, senha)
+    )
+    user = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    if user:
+        st.session_state.logado = True
+        st.session_state.usuario = user["email"]
+        st.session_state.tipo = user["tipo"]
+        st.session_state.nome = user["nome"]
+        st.session_state.usuario_id = user["id"]
+        return True
     return False
 
 # Só mostra dashboard se estiver logado e com usuário/tipo válidos
@@ -112,12 +116,12 @@ input {
 
 with st.form("login_form"):
     st.markdown('<div style="height: 16px"></div>', unsafe_allow_html=True)
-    username = st.text_input("Utilizador (ID)")
+    email = st.text_input("Email")
     senha = st.text_input("Palavra-passe", type="password")
     login_btn = st.form_submit_button("Entrar")
 
     if login_btn:
-        if autenticar(username, senha):
+        if autenticar(email, senha):
             st.success("Login efetuado com sucesso!")
             st.rerun()
         else:

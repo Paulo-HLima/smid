@@ -1,6 +1,13 @@
 import streamlit as st
 from utils.auth import verificar_autenticacao
-from utils.dados import DOCAS, CLIENTES, AGENDAMENTOS, ENCOMENDAS
+from database.db import (
+    buscar_docas,
+    buscar_alocacoes_docas,
+    buscar_agendamentos_por_usuario,
+    criar_agendamento,
+    buscar_encomendas,
+    alocar_encomenda_agendamento,
+)
 
 def render():
     if not verificar_autenticacao("cliente"):
@@ -32,32 +39,35 @@ def render():
     </style>
     """, unsafe_allow_html=True)
 
-    # Cabeçalho visual padronizado
     usuario = st.session_state.usuario
+    usuario_id = st.session_state.usuario_id
+
+    # Cabeçalho em formato de card
     st.markdown(f"""
     <div style="
-        max-width: 900px;
-        margin: 0 auto 28px auto;
-        padding: 32px 28px 24px 28px;
+        max-width: 520px;
+        margin: 32px auto 18px auto;
+        padding: 28px 24px 18px 24px;
         background: linear-gradient(120deg, #e3f2fd 60%, #90caf9 100%);
         border-radius: 18px;
         box-shadow: 0 4px 24px #0004;
         border-left: 8px solid #1976d2;
-        text-align: left;
-        display: flex;
-        align-items: center;
-        gap: 24px;
+        text-align: center;
     ">
-        <div style="font-size:2.5rem;">👤</div>
-        <div>
-            <h1 style="color:#1976d2; font-weight:800; letter-spacing:1px; margin-bottom:8px; margin-top:0;">Dashboard do Cliente</h1>
-            <span style="color:#222; font-size:1.13rem;">Bem-vindo, <b>{usuario}</b>!</span>
-        </div>
+        <div style="font-size:2.5rem; margin-bottom:8px;">👤</div>
+        <h2 style="color:#1976d2; font-weight:800; letter-spacing:1px; margin-bottom:10px;">Dashboard do Cliente</h2>
+        <span style="color:#333; font-size:1.1rem;">Bem-vindo, <b>{st.session_state.nome}</b>!<br></span>
     </div>
     """, unsafe_allow_html=True)
 
-    cliente_info = CLIENTES.get(usuario, {})
-    docas_cliente = cliente_info.get("docas", [])
+    # Buscar docas do banco e alocações do banco
+    docas = buscar_docas()
+    alocacoes = buscar_alocacoes_docas()
+
+    # Filtra docas alocadas para este cliente
+    docas_cliente = [
+        d["doca_nome"] for d in alocacoes if d["usuario_id"] == usuario_id
+    ]
 
     # Inicializa toggles na sessão
     if "show_agendamentos" not in st.session_state:
@@ -76,7 +86,7 @@ def render():
         st.session_state.show_agendamentos = not st.session_state.show_agendamentos
 
     if st.session_state.show_agendamentos:
-        ags = [a for a in AGENDAMENTOS if a["cliente"] == usuario]
+        ags = buscar_agendamentos_por_usuario(usuario_id)
         st.markdown(
             '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Meus Agendamentos</h3>',
             unsafe_allow_html=True
@@ -107,7 +117,7 @@ def render():
         <span style="vertical-align: middle;">{icone} Agendamento {status_legenda}</span>
     </div>
     <div style="color: #222; font-size: 1.05rem; margin-bottom: 2px;">
-        <b>Data:</b> {ag['data']} &nbsp; <b>Hora:</b> {ag['hora']} &nbsp; <b>Doca:</b> {ag['doca']}
+        <b>Data:</b> {ag['data']} &nbsp; <b>Hora:</b> {ag['hora']} &nbsp; <b>Doca:</b> {ag['doca_nome']}
     </div>
     <div style="color: #444; font-size: 0.98rem;">
         <b>Status:</b> <span style="color:{cor_status};">{ag['status']}</span>
@@ -121,15 +131,18 @@ def render():
 </div>
 """, unsafe_allow_html=True)
         else:
-            st.info("Nenhum agendamento encontrado.")
+            st.markdown(
+                '<h3 style="color:#d0e4f7; font-weight:200; letter-spacing:0.5px; margin-bottom:12px; font-size:1.02rem;">⚠️Nenhum Agendamento Encontrado.⚠️</h3>',
+                unsafe_allow_html=True
+            )
 
     # Botão toggle para docas
     if len(docas_cliente) == 1:
         if st.button("🔎 Status da Doca", key="btn_docas"):
             st.session_state.show_docas = not st.session_state.show_docas
         if st.session_state.show_docas:
-            doca_id = docas_cliente[0]
-            doca_status = DOCAS.get(doca_id, {}).get("status", "Desconhecido")
+            doca_nome = docas_cliente[0]
+            doca_status = next((d["status"] for d in docas if d["nome"] == doca_nome), "Desconhecido")
             cor_borda, cor_grad1, cor_grad2, cor_status, icone, status_legenda = {
                 "Livre": ("#388e3c", "#e8f5e9", "#a5d6a7", "#388e3c", "🟢", "Livre"),
                 "Ocupada": ("#1976d2", "#e3f2fd", "#90caf9", "#1976d2", "🔵", "Ocupada"),
@@ -149,7 +162,7 @@ def render():
 ">
   <div>
     <div style="font-size: 1.08rem; color: {cor_status}; font-weight: 700; margin-bottom: 2px;">
-        <span style="vertical-align: middle;">{icone} Doca {doca_id}</span>
+        <span style="vertical-align: middle;">{icone} Doca {doca_nome}</span>
     </div>
     <div style="color: #444; font-size: 0.98rem;">
         <b>Status:</b> <span style="color:{cor_status};">{status_legenda}</span>
@@ -161,8 +174,8 @@ def render():
         if st.button("🔎 Ver Docas", key="btn_docas"):
             st.session_state.show_docas = not st.session_state.show_docas
         if st.session_state.show_docas:
-            for doca_id in docas_cliente:
-                doca_status = DOCAS.get(doca_id, {}).get("status", "Desconhecido")
+            for doca_nome in docas_cliente:
+                doca_status = next((d["status"] for d in docas if d["nome"] == doca_nome), "Desconhecido")
                 cor_borda, cor_grad1, cor_grad2, cor_status, icone, status_legenda = {
                     "Livre": ("#388e3c", "#e8f5e9", "#a5d6a7", "#388e3c", "🟢", "Livre"),
                     "Ocupada": ("#1976d2", "#e3f2fd", "#90caf9", "#1976d2", "🔵", "Ocupada"),
@@ -182,7 +195,7 @@ def render():
 ">
   <div>
     <div style="font-size: 1.08rem; color: {cor_status}; font-weight: 700; margin-bottom: 2px;">
-        <span style="vertical-align: middle;">{icone} Doca {doca_id}</span>
+        <span style="vertical-align: middle;">{icone} Doca {doca_nome}</span>
     </div>
     <div style="color: #444; font-size: 0.98rem;">
         <b>Status:</b> <span style="color:{cor_status};">{status_legenda}</span>
@@ -206,22 +219,16 @@ def render():
             hora = st.time_input("Hora")
             enviar = st.form_submit_button("Solicitar")
             if enviar:
-                novo_agendamento = {
-                    "cliente": usuario,
-                    "doca": doca_escolhida,
-                    "data": data.strftime("%d/%m/%Y"),
-                    "hora": hora.strftime("%H:%M"),
-                    "status": "Pendente"
-                }
-                AGENDAMENTOS.append(novo_agendamento)
+                doca_id = next((d["id"] for d in docas if d["nome"] == doca_escolhida), None)
+                criar_agendamento(usuario_id, doca_id, data, hora)
                 st.markdown(
-    '<div style="color:#388e3c; font-weight:700; background:#e8f5e9; padding:16px 18px; border-radius:8px; border-left:5px solid #388e3c;">Solicitação de agendamento enviada!</div>',
-    unsafe_allow_html=True
-)
+                    '<div style="color:#388e3c; font-weight:700; background:#e8f5e9; padding:16px 18px; border-radius:8px; border-left:5px solid #388e3c;">Solicitação de agendamento enviada!</div>',
+                    unsafe_allow_html=True
+                )
                 st.session_state.show_form_agendamento = False
                 st.session_state.show_agendamentos = True  # Mostra agendamentos após solicitar
 
-    # Seção de Encomendas
+    # Seção de Encomendas (agora usa dados do banco)
     if st.button("📦 Ver Encomendas", key="btn_encomendas"):
         st.session_state.show_encomendas = not st.session_state.show_encomendas
 
@@ -230,11 +237,18 @@ def render():
             '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Minhas Encomendas</h3>',
             unsafe_allow_html=True
         )
-        encomendas_cliente = [e for e in ENCOMENDAS if e["cliente"] == usuario]
+        # Busca encomendas do banco e filtra pelo usuario_id
+        encomendas_cliente = [e for e in buscar_encomendas() if e["usuario_id"] == usuario_id]
+        ags_disponiveis = [
+            ag for ag in buscar_agendamentos_por_usuario(usuario_id)
+            if ag["status"] in ("Pendente", "Em Processamento", "Confirmado")
+        ]
         if not encomendas_cliente:
-            st.info("Nenhuma encomenda registrada.")
+            st.markdown(
+                '<h3 style="color:#d0e4f7; font-weight:200; letter-spacing:0.5px; margin-bottom:12px; font-size:1.02rem;">⚠️Nenhuma Encomenda Registada.⚠️</h3>',
+                unsafe_allow_html=True)
         else:
-            for encomenda in encomendas_cliente:
+            for idx, encomenda in enumerate(encomendas_cliente):
                 cor_borda, cor_grad1, cor_grad2, cor_status, icone, status_legenda = {
                     "Pendente":   ("#b28704", "#fff9e1", "#ffe082", "#b28704", "📦", "Pendente"),
                     "Em Processamento": ("#1976d2", "#e3f2fd", "#90caf9", "#1976d2", "🔄", "Em Processamento"),
@@ -264,9 +278,6 @@ def render():
     <div style="color: #444; font-size: 0.98rem;">
         <b>Status:</b> <span style="color:{cor_status};">{encomenda['status']}</span>
     </div>
-    {"<div style='color:#444;font-size:0.98rem;'><b>Agendamento:</b> " +
-        f"{AGENDAMENTOS[encomenda['agendamento_idx']]['data']} {AGENDAMENTOS[encomenda['agendamento_idx']]['hora']} | Doca {AGENDAMENTOS[encomenda['agendamento_idx']]['doca']} | Status: {AGENDAMENTOS[encomenda['agendamento_idx']]['status']}" +
-        "</div>" if encomenda.get("agendamento_idx") is not None else ""}
   </div>
   <div style="text-align: right;">
     <span style="background:{cor_status}22; color:{cor_status}; padding:6px 14px; border-radius:8px; font-weight:700; font-size:0.95rem;">
@@ -276,47 +287,33 @@ def render():
 </div>
 """, unsafe_allow_html=True)
 
-                # Alocar encomenda pendente
-                if encomenda["status"] == "Pendente":
-                    ags_disp = [
-                        (idx, ag)
-                        for idx, ag in enumerate(AGENDAMENTOS)
-                        if ag["cliente"] == usuario and ag["status"] == "Em Processamento"
-                    ]
-                    if ags_disp:
-                        options = [
-                            (str(idx), f"{ag['data']} {ag['hora']} | Doca {ag['doca']}")
-                            for idx, ag in ags_disp
-                        ]
-                        with st.form(f"form_alocar_{encomenda['id']}"):
-                            st.markdown('<span style="color:#1976d2; font-weight:700; font-size:1.08rem;">Alocar em agendamento:</span>', unsafe_allow_html=True)
-                            escolha = st.selectbox(
-                                "",  # label vazio
-                                options=options,
-                                format_func=lambda x: x[1] if isinstance(x, tuple) else x
-                            )
+                # Botão para alocar encomenda em agendamento (apenas se pendente e não alocada)
+                if encomenda["status"] == "Pendente" and not encomenda.get("agendamento_id"):
+                    if st.button("Alocar em Agendamento", key=f"alocar_{encomenda['id']}"):
+                        st.session_state[f"show_alocar_{encomenda['id']}"] = not st.session_state.get(f"show_alocar_{encomenda['id']}", False)
+                if st.session_state.get(f"show_alocar_{encomenda['id']}", False):
+                    with st.form(f"form_alocar_{encomenda['id']}"):
+                        if not ags_disponiveis:
+                            st.warning("Você não possui agendamentos disponíveis para alocar esta encomenda.")
+                            st.form_submit_button("OK")  # <-- Adicione esta linha
+                        else:
+                            ag_options = [
+                                f"Agendamento: {ag['id']} - Data: {ag['data']} - Hora: {ag['hora']} - Doca: {ag['doca_nome']}" for ag in ags_disponiveis
+                            ]
+                            ag_id_map = {ag_options[i]: ags_disponiveis[i]["id"] for i in range(len(ags_disponiveis))}
+                            ag_select = st.selectbox("Escolha o agendamento para alocar esta encomenda:", ag_options)
                             submit = st.form_submit_button("Alocar")
                             if submit:
-                                encomenda["agendamento_idx"] = int(escolha[0])
-                                encomenda["status"] = "Em Processamento"
-                                st.success("Encomenda alocada com sucesso!")
+                                agendamento_id = ag_id_map[ag_select]
+                                alocar_encomenda_agendamento(encomenda["id"], agendamento_id)
+                                st.success("Encomenda alocada ao agendamento com sucesso!")
+                                st.session_state[f"show_alocar_{encomenda['id']}"] = False
                                 st.rerun()
-                    else:
-                        st.markdown('<span style="color:#1976d2; font-weight:700; font-size:1.08rem;">Nenhum Agendamento disponível para alocação.</span>', unsafe_allow_html=True)
-                # Cancelar encomenda (Pendente ou Em Processamento)
-                if encomenda["status"] in ["Pendente", "Em Processamento"]:
-                    if st.button("Cancelar Encomenda", key=f"cancelar_{encomenda['id']}"):
-                        encomenda["status"] = "Cancelada"
-                        encomenda["agendamento_idx"] = None
-                        st.warning("Encomenda cancelada!")
-                        st.rerun()
-                st.divider()
-
     st.divider()
     st.markdown(
-    f'<div style="color:#90caf9; font-size:0.98rem; margin-top:24px; text-align:right;">Utilizador: <b>ID:</b> {usuario} &nbsp;|&nbsp; <b>Email:</b> {usuario}@cliente.smid</div>',
-    unsafe_allow_html=True
-)
+        f'<div style="color:#90caf9; font-size:0.98rem; margin-top:24px; text-align:right;">Utilizador: <b>ID:</b> {st.session_state.nome} &nbsp;|&nbsp; <b>Email:</b> {usuario}</div>',
+        unsafe_allow_html=True
+    )
 
     if st.button("🔓 Sair"):
         st.session_state.logado = False

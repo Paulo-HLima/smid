@@ -82,25 +82,46 @@ def render():
     st.divider()
 
     # Botão toggle para agendamentos
-    if st.button("📅 Ver Agendamentos", key="btn_agendamentos"):
+    if st.button("📅 Ver Agendamentos", key="btn_agendamentos_cliente"):
         st.session_state.show_agendamentos = not st.session_state.show_agendamentos
 
     if st.session_state.show_agendamentos:
         ags = buscar_agendamentos_por_usuario(usuario_id)
-        st.markdown(
-            '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Meus Agendamentos</h3>',
-            unsafe_allow_html=True
-        )
-        if ags:
-            for ag in ags:
-                cor_borda, cor_grad1, cor_grad2, cor_status, icone, status_legenda = {
-                    "Pendente":   ("#b28704", "#fff9e1", "#ffe082", "#b28704", "⏳", "Pendente"),
-                    "Em Processamento": ("#1976d2", "#e3f2fd", "#90caf9", "#1976d2", "🔄", "Em Processamento"),
-                    "Confirmado": ("#0097a7", "#e0f7fa", "#80deea", "#0097a7", "📅", "Confirmado"),
-                    "Concluído": ("#388e3c", "#e8f5e9", "#a5d6a7", "#388e3c", "✅", "Concluído"),
-                    "Cancelado":  ("#d32f2f", "#ffebee", "#ffcdd2", "#d32f2f", "❌", "Cancelado"),
-                }.get(ag["status"], ("#b0bec5", "#eceff1", "#b0bec5", "#78909c", "❔", ag["status"]))
-                st.markdown(f"""
+
+        # Inicializa toggles para cada status
+        for status in ["Pendente", "Em Processamento", "Confirmado", "Concluído", "Cancelado"]:
+            key_toggle = f"show_ag_{status.lower().replace(' ', '_')}_cliente"
+            if key_toggle not in st.session_state:
+                st.session_state[key_toggle] = False
+
+        # Botões toggle para cada status
+        status_labels = {
+            "Pendente": "Agendamentos Pendentes",
+            "Em Processamento": "Agendamentos em Processamento",
+            "Confirmado": "Agendamentos Confirmados",
+            "Concluído": "Agendamentos Concluídos",
+            "Cancelado": "Agendamentos Cancelados"
+        }
+        for status in status_labels:
+            if st.button(status_labels[status], key=f"btn_{status.lower().replace(' ', '_')}_cliente"):
+                st.session_state[f"show_ag_{status.lower().replace(' ', '_')}_cliente"] = not st.session_state[f"show_ag_{status.lower().replace(' ', '_')}_cliente"]
+            if st.session_state[f"show_ag_{status.lower().replace(' ', '_')}_cliente"]:
+                ags_filtrados = [ag for ag in ags if ag["status"] == status]
+                if not ags_filtrados:
+                    st.markdown(
+                        '<h3 style="color:#d0e4f7; font-weight:200; letter-spacing:0.5px; margin-bottom:12px; font-size:1.02rem;">⚠️Nenhum agendamento com este status.⚠️</h3>',
+                        unsafe_allow_html=True
+                    )
+                else:
+                    for ag in ags_filtrados:
+                        cor_borda, cor_grad1, cor_grad2, cor_status, icone, status_legenda = {
+                            "Pendente":   ("#b28704", "#fff9e1", "#ffe082", "#b28704", "⏳", "Pendente"),
+                            "Em Processamento": ("#1976d2", "#e3f2fd", "#90caf9", "#1976d2", "🔄", "Em Processamento"),
+                            "Confirmado": ("#0097a7", "#e0f7fa", "#80deea", "#0097a7", "📅", "Confirmado"),
+                            "Concluído": ("#388e3c", "#e8f5e9", "#a5d6a7", "#388e3c", "✅", "Concluído"),
+                            "Cancelado":  ("#d32f2f", "#ffebee", "#ffcdd2", "#d32f2f", "❌", "Cancelado"),
+                        }.get(ag["status"], ("#b0bec5", "#eceff1", "#b0bec5", "#78909c", "❔", ag["status"]))
+                        st.markdown(f"""
 <div style="
     background: linear-gradient(90deg, {cor_grad1} 60%, {cor_grad2} 100%);
     padding: 18px 24px;
@@ -131,10 +152,7 @@ def render():
 </div>
 """, unsafe_allow_html=True)
         else:
-            st.markdown(
-                '<h3 style="color:#d0e4f7; font-weight:200; letter-spacing:0.5px; margin-bottom:12px; font-size:1.02rem;">⚠️Nenhum Agendamento Encontrado.⚠️</h3>',
-                unsafe_allow_html=True
-            )
+            st.divider()
 
     # Botão toggle para docas
     if len(docas_cliente) == 1:
@@ -233,30 +251,41 @@ def render():
         st.session_state.show_encomendas = not st.session_state.show_encomendas
 
     if st.session_state.show_encomendas:
-        st.markdown(
-            '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Minhas Encomendas</h3>',
-            unsafe_allow_html=True
-        )
-        # Busca encomendas do banco e filtra pelo usuario_id
         encomendas_cliente = [e for e in buscar_encomendas() if e["usuario_id"] == usuario_id]
-        ags_disponiveis = [
-            ag for ag in buscar_agendamentos_por_usuario(usuario_id)
-            if ag["status"] in ("Pendente", "Em Processamento", "Confirmado")
-        ]
-        if not encomendas_cliente:
-            st.markdown(
-                '<h3 style="color:#d0e4f7; font-weight:200; letter-spacing:0.5px; margin-bottom:12px; font-size:1.02rem;">⚠️Nenhuma Encomenda Registada.⚠️</h3>',
-                unsafe_allow_html=True)
-        else:
-            for idx, encomenda in enumerate(encomendas_cliente):
-                cor_borda, cor_grad1, cor_grad2, cor_status, icone, status_legenda = {
-                    "Pendente":   ("#b28704", "#fff9e1", "#ffe082", "#b28704", "📦", "Pendente"),
-                    "Em Processamento": ("#1976d2", "#e3f2fd", "#90caf9", "#1976d2", "🔄", "Em Processamento"),
-                    "Processada": ("#388e3c", "#e8f5e9", "#a5d6a7", "#388e3c", "✅", "Processada"),
-                    "Cancelada":  ("#d32f2f", "#ffebee", "#ffcdd2", "#d32f2f", "❌", "Cancelada"),
-                }[encomenda["status"]]
 
-                st.markdown(f"""
+        # Inicializa toggles para cada status de encomenda
+        encomenda_statuses = ["Pendente", "Em Processamento", "Processada", "Cancelada"]
+        for status in encomenda_statuses:
+            key_toggle = f"show_encomenda_{status.lower().replace(' ', '_')}_cliente"
+            if key_toggle not in st.session_state:
+                st.session_state[key_toggle] = False
+
+        status_labels = {
+            "Pendente": "Encomendas Pendentes",
+            "Em Processamento": "Encomendas em Processamento",
+            "Processada": "Encomendas Processadas",
+            "Cancelada": "Encomendas Canceladas"
+        }
+
+        for status in encomenda_statuses:
+            if st.button(status_labels[status], key=f"btn_encomenda_{status.lower().replace(' ', '_')}_cliente"):
+                st.session_state[f"show_encomenda_{status.lower().replace(' ', '_')}_cliente"] = not st.session_state[f"show_encomenda_{status.lower().replace(' ', '_')}_cliente"]
+            if st.session_state[f"show_encomenda_{status.lower().replace(' ', '_')}_cliente"]:
+                encomendas_filtradas = [e for e in encomendas_cliente if e["status"] == status]
+                if not encomendas_filtradas:
+                    st.markdown(
+                        f'<h3 style="color:#d0e4f7; font-weight:200; letter-spacing:0.5px; margin-bottom:12px; font-size:1.02rem;">⚠️Nenhuma encomenda.⚠️</h3>',
+                        unsafe_allow_html=True
+                    )
+                else:
+                    for encomenda in encomendas_filtradas:
+                        cor_borda, cor_grad1, cor_grad2, cor_status, icone, status_legenda = {
+                            "Pendente":   ("#b28704", "#fff9e1", "#ffe082", "#b28704", "📦", "Pendente"),
+                            "Em Processamento": ("#1976d2", "#e3f2fd", "#90caf9", "#1976d2", "🔄", "Em Processamento"),
+                            "Processada": ("#388e3c", "#e8f5e9", "#a5d6a7", "#388e3c", "✅", "Processada"),
+                            "Cancelada":  ("#d32f2f", "#ffebee", "#ffcdd2", "#d32f2f", "❌", "Cancelada"),
+                        }[encomenda["status"]]
+                        st.markdown(f"""
 <div style="
     background: linear-gradient(90deg, {cor_grad1} 60%, {cor_grad2} 100%);
     padding: 18px 24px;
@@ -287,29 +316,33 @@ def render():
 </div>
 """, unsafe_allow_html=True)
 
-                # Botão para alocar encomenda em agendamento (apenas se pendente e não alocada)
-                if encomenda["status"] == "Pendente" and not encomenda.get("agendamento_id"):
-                    if st.button("Alocar em Agendamento", key=f"alocar_{encomenda['id']}"):
-                        st.session_state[f"show_alocar_{encomenda['id']}"] = not st.session_state.get(f"show_alocar_{encomenda['id']}", False)
-                if st.session_state.get(f"show_alocar_{encomenda['id']}", False):
-                    with st.form(f"form_alocar_{encomenda['id']}"):
-                        if not ags_disponiveis:
-                            st.warning("Você não possui agendamentos disponíveis para alocar esta encomenda.")
-                            st.form_submit_button("OK")  # <-- Adicione esta linha
-                        else:
-                            ag_options = [
-                                f"Agendamento: {ag['id']} - Data: {ag['data']} - Hora: {ag['hora']} - Doca: {ag['doca_nome']}" for ag in ags_disponiveis
-                            ]
-                            ag_id_map = {ag_options[i]: ags_disponiveis[i]["id"] for i in range(len(ags_disponiveis))}
-                            ag_select = st.selectbox("Escolha o agendamento para alocar esta encomenda:", ag_options)
-                            submit = st.form_submit_button("Alocar")
-                            if submit:
-                                agendamento_id = ag_id_map[ag_select]
-                                alocar_encomenda_agendamento(encomenda["id"], agendamento_id)
-                                st.success("Encomenda alocada ao agendamento com sucesso!")
-                                st.session_state[f"show_alocar_{encomenda['id']}"] = False
-                                st.rerun()
-    st.divider()
+                        # Botão para alocar encomenda em agendamento (apenas se pendente e não alocada)
+                        ags_disponiveis_aloc = [
+                            ag for ag in buscar_agendamentos_por_usuario(usuario_id)
+                            if ag["status"] in ("Em Processamento", "Confirmado")
+                        ]
+                        if encomenda["status"] == "Pendente" and not encomenda.get("agendamento_id"):
+                            if st.button("Alocar em Agendamento", key=f"alocar_{encomenda['id']}"):
+                                st.session_state[f"show_alocar_{encomenda['id']}"] = not st.session_state.get(f"show_alocar_{encomenda['id']}", False)
+                        if st.session_state.get(f"show_alocar_{encomenda['id']}", False):
+                            with st.form(f"form_alocar_{encomenda['id']}"):
+                                if not ags_disponiveis_aloc:
+                                    st.warning("Você não possui agendamentos disponíveis para alocar esta encomenda.")
+                                    st.form_submit_button("OK")
+                                else:
+                                    ag_options = [
+                                        f"Agendamento: {ag['id']} - Data: {ag['data']} - Hora: {ag['hora']} - Doca: {ag['doca_nome']}" for ag in ags_disponiveis_aloc
+                                    ]
+                                    ag_id_map = {ag_options[i]: ags_disponiveis_aloc[i]["id"] for i in range(len(ags_disponiveis_aloc))}
+                                    ag_select = st.selectbox("Escolha o agendamento para alocar esta encomenda:", ag_options)
+                                    submit = st.form_submit_button("Alocar")
+                                    if submit:
+                                        agendamento_id = ag_id_map[ag_select]
+                                        alocar_encomenda_agendamento(encomenda["id"], agendamento_id)
+                                        st.success("Encomenda alocada ao agendamento com sucesso!")
+                                        st.session_state[f"show_alocar_{encomenda['id']}"] = False
+                                        st.rerun()
+        st.divider()
     st.markdown(
         f'<div style="color:#90caf9; font-size:0.98rem; margin-top:24px; text-align:right;">Utilizador: <b>ID:</b> {st.session_state.nome} &nbsp;|&nbsp; <b>Email:</b> {usuario}</div>',
         unsafe_allow_html=True

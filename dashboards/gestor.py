@@ -1,14 +1,312 @@
 import streamlit as st
+import pandas as pd  # <-- Adicione esta linha!
 from utils.auth import verificar_autenticacao
-from utils.dados import AGENDAMENTOS, ALERTAS, DOCAS, ENCOMENDAS
-from datetime import datetime
+from datetime import datetime, timedelta
+from streamlit_option_menu import option_menu
+from database.db import (
+    buscar_agendamentos,
+    buscar_docas,
+    buscar_clientes,
+    buscar_alocacoes_docas,
+    alocar_doca_cliente,
+    desalocar_doca_cliente,
+    atualizar_agendamento_status,
+    atualizar_agendamento_doca_data_hora,
+    buscar_alertas,
+    resolver_alerta,
+    buscar_encomendas,
+    cancelar_encomenda,
+    atualizar_status_doca,
+    buscar_utilizadores,
+    criar_utilizador,
+    remover_utilizador,
+)
+
+def painel_gestao_utilizadores():
+    st.markdown(
+        '<h3 style="color:#1976d2; font-weight:800; letter-spacing:0.5px; margin-bottom:18px;">👤 Gestão de Utilizadores</h3>',
+        unsafe_allow_html=True
+    )
+
+    aba = st.radio(
+        "Escolha uma opção:",
+        ("Listar Utilizadores", "Criar Utilizador", "Remover Utilizador"),
+        horizontal=True
+    )
+
+    if aba == "Listar Utilizadores":
+        users = buscar_utilizadores()
+        tipos = {"gestor": "Gestor", "operador": "Operador", "cliente": "Cliente"}
+        st.markdown(
+            '<h4 style="color:#1565c0; font-weight:700; margin-top:12px;">Lista de Utilizadores</h4>',
+            unsafe_allow_html=True
+        )
+        for tipo in ["gestor", "operador", "cliente"]:
+            st.markdown(
+                f'<div style="color:#1976d2; font-weight:600; margin-top:10px; margin-bottom:4px;">{tipos[tipo]}s:</div>',
+                unsafe_allow_html=True
+            )
+            users_tipo = [u for u in users if u["tipo"] == tipo]
+            if not users_tipo:
+                st.markdown(
+                    '<div style="color:#888; font-size:0.98rem; margin-bottom:8px;">Nenhum utilizador.</div>',
+                    unsafe_allow_html=True
+                )
+            else:
+                for u in users_tipo:
+                    st.markdown(
+                        f"""
+                        <div style="
+                            background: linear-gradient(90deg, #e3f2fd 60%, #bbdefb 100%);
+                            padding: 10px 18px;
+                            border-radius: 8px;
+                            margin-bottom: 8px;
+                            box-shadow: 0 1px 6px #0001;
+                            border-left: 5px solid #1976d2;
+                            color: #222;
+                            font-size: 1.01rem;
+                        ">
+                            <b>{u['nome']}</b> &nbsp;|&nbsp; <span style="color:#1976d2;">{u['email']}</span>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+
+    elif aba == "Criar Utilizador":
+        st.markdown(
+            '<h4 style="color:#1565c0; font-weight:700; margin-top:12px;">Novo Utilizador</h4>',
+            unsafe_allow_html=True
+        )
+        with st.form("form_criar_utilizador"):
+            nome = st.text_input("Nome")
+            tipo = st.selectbox("Tipo de Utilizador", ["gestor", "operador", "cliente"])
+            email = st.text_input("Email")
+            senha = st.text_input("Senha", type="password")
+            enviar = st.form_submit_button("Criar")
+            if enviar:
+                if not nome or not email or not senha:
+                    st.warning("Preencha todos os campos.")
+                else:
+                    criar_utilizador(nome, tipo, email, senha)
+                    st.success("Utilizador criado com sucesso!")
+                    st.rerun()
+
+    elif aba == "Remover Utilizador":
+        users = buscar_utilizadores()
+        st.markdown(
+            '<h4 style="color:#1565c0; font-weight:700; margin-top:12px;">Remover Utilizador</h4>',
+            unsafe_allow_html=True
+        )
+        for u in users:
+            col1, col2 = st.columns([5,1])
+            with col1:
+                st.markdown(
+                    f"""
+                    <div style="
+                        background: linear-gradient(90deg, #fff3e0 60%, #ffe0b2 100%);
+                        padding: 8px 14px;
+                        border-radius: 7px;
+                        margin-bottom: 7px;
+                        border-left: 5px solid #d84315;
+                        color: #222;
+                        font-size: 1.01rem;
+                    ">
+                        <b>{u['nome']}</b> &nbsp;|&nbsp; <span style="color:#1976d2;">{u['tipo']}</span> &nbsp;|&nbsp; <span style="color:#1976d2;">{u['email']}</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            with col2:
+                if st.button("Remover", key=f"remover_{u['id']}"):
+                    remover_utilizador(u['id'])
+                    st.success(f"Utilizador {u['nome']} removido!")
+                    st.rerun()
+
+def painel_metricas():
+    st.markdown(
+        '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">📈 Painel de Métricas / KPIs:</h3>',
+        unsafe_allow_html=True
+    )
+
+    ags = buscar_agendamentos()
+    df = pd.DataFrame(ags)
+
+    if not df.empty and "confirmado_em" in df.columns and "finalizado_em" in df.columns:
+        df_concluidos = df[(df["status"] == "Concluído") & df["confirmado_em"].notnull() & df["finalizado_em"].notnull()].copy()
+        if not df_concluidos.empty:
+            df_concluidos["confirmado_em"] = pd.to_datetime(df_concluidos["confirmado_em"])
+            df_concluidos["finalizado_em"] = pd.to_datetime(df_concluidos["finalizado_em"])
+            df_concluidos["duracao"] = (df_concluidos["finalizado_em"] - df_concluidos["confirmado_em"]).dt.total_seconds() / 3600
+            tempo_medio = df_concluidos["duracao"].mean()
+            st.metric("Tempo médio de ocupação (h)", f"{tempo_medio:.2f}" if tempo_medio else "N/A")
+        else:
+            st.metric("Tempo médio de ocupação (h)", "N/A")
+    else:
+        st.metric("Tempo médio de ocupação (h)", "N/A")
+
+    if not df.empty and "status" in df.columns:
+        status_counts = df["status"].value_counts()
+        st.markdown(
+        '<h3 style="color:#d0e4f7; font-weight:200; letter-spacing:0.5px; margin-bottom:2px;">Quantidade de Agendamento por Status:</h3>',
+        unsafe_allow_html=True
+    )
+        st.dataframe(status_counts.rename_axis('Status').reset_index(name='Quantidade'))
+    else:
+        st.write("Nenhum agendamento cadastrado.")
+
+    alertas = buscar_alertas()
+    atrasos = [a for a in alertas if a.get("tipo") == "Atraso" and a.get("status") == "Ativo"]
+    st.metric("Agendamentos em atraso", len(atrasos))
+
+    if not df.empty and "doca_nome" in df.columns:
+        doca_counts = df["doca_nome"].value_counts()
+        st.markdown(
+        '<h3 style="color:#d0e4f7; font-weight:200; letter-spacing:0.5px; margin-bottom:2px;">Utilização de cada doca:</h3>',
+        unsafe_allow_html=True
+    )
+        st.dataframe(doca_counts.rename_axis('Doca').reset_index(name='Quantidade'))
+
+    st.markdown(
+        '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Exportar Relatório de Agendamentos</h3>',
+        unsafe_allow_html=True
+    )
+    export_df = df.copy()
+    if st.button("Exportar para Excel"):
+        export_df.to_excel("relatorio_agendamentos.xlsx", index=False)
+        st.success("Relatório exportado como relatorio_agendamentos.xlsx")
 
 def render():
+
+    st.markdown("""
+<style>
+label, .stSelectbox > label {
+    color: #d0e4f7 !important;
+    font-weight: 700 !important;
+    font-size: 1.08rem !important;
+    letter-spacing: 0.5px;
+}
+</style>
+""", unsafe_allow_html=True)
+
     if not verificar_autenticacao("gestor"):
         st.stop()
 
-    st.title("📊 Dashboard do Gestor")
+    st.markdown("""
+    <style>
+    body, .stApp {
+        background: linear-gradient(120deg, #232946 0%, #394867 100%) !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div style="
+        max-width: 900px;
+        margin: 0 auto 28px auto;
+        padding: 32px 28px 24px 28px;
+        background: linear-gradient(120deg, #e3f2fd 60%, #90caf9 100%);
+        border-radius: 18px;
+        box-shadow: 0 4px 24px #0004;
+        border-left: 8px solid #1976d2;
+        text-align: left;
+        display: flex;
+        align-items: center;
+        gap: 24px;
+    ">
+        <div style="font-size:2.5rem;">📊</div>
+        <div>
+            <h1 style="color:#1976d2; font-weight:800; letter-spacing:1px; margin-bottom:8px; margin-top:0;">Dashboard do Gestor</h1>
+            <span style="color:#222; font-size:1.13rem;">Bem-vindo, <b>{st.session_state.nome}</b>!</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     usuario = st.session_state.usuario
+
+    from database.db import criar_alerta
+    from datetime import datetime
+
+    def agendamento_atrasado(ag):
+        # Considera atraso se status for Confirmado ou Em Processamento e data/hora já passou
+        if ag["status"] not in ["Confirmado", "Em Processamento"]:
+            return False
+        try:
+            data_str = str(ag["data"])
+            hora_str = str(ag["hora"])
+            # Extrai apenas a data se vier com hora (ex: '2025-06-17 0:00:00')
+            if " " in data_str:
+                data_str = data_str.split(" ")[0]
+            # Suporta formatos dd/mm/yyyy ou yyyy-mm-dd
+            if "/" in data_str:
+                data_dt = datetime.strptime(data_str, "%d/%m/%Y")
+            else:
+                data_dt = datetime.strptime(data_str, "%Y-%m-%d")
+            # Se hora vier como '16:47:39', pega só HH:MM
+            if ":" in hora_str and len(hora_str.split(":")) > 2:
+                hora_str = ":".join(hora_str.split(":")[:2])
+            hora_dt = datetime.strptime(hora_str, "%H:%M").time()
+            agendamento_dt = datetime.combine(data_dt, hora_dt)
+            return agendamento_dt < datetime.now()
+        except Exception as e:
+            print(f"[DEBUG] Erro ao verificar atraso: {e} | data: {ag['data']} | hora: {ag['hora']}")
+            return False
+
+    def gerar_alertas_atraso(ags_db, alertas):
+        # Gera alerta de atraso para cada agendamento atrasado sem alerta ativo
+        for ag in ags_db:
+            if agendamento_atrasado(ag):
+                ja_existe = any(
+                    alerta.get("tipo") == "Atraso"
+                    and alerta.get("agendamento_id") == ag["id"]
+                    and alerta.get("status", "Ativo") == "Ativo"
+                    for alerta in alertas
+                )
+                if not ja_existe:
+                    criar_alerta(
+                        mensagem=f"Agendamento {ag['id']} em atraso na doca {ag['doca_nome']} ({ag['data']} {ag['hora']})",
+                        doca_id=ag["doca_id"],
+                        tipo="Atraso",
+                        agendamento_id=ag["id"]
+                    )
+
+    # --- ALERTAS: busca do banco ---
+    alertas = buscar_alertas()
+    ags_db = buscar_agendamentos()
+
+    # Geração de alertas de atraso (robusta, sem duplicidade)
+    gerar_alertas_atraso(ags_db, alertas)
+
+    usuario = st.session_state.usuario
+
+    # --- ALERTAS: busca do banco ---
+    alertas = buscar_alertas()
+
+    # --- Lógica de conflito: gerar alerta ao detectar conflito em pendentes ---
+    ags_db = buscar_agendamentos()  # Busca todos os agendamentos do banco
+
+    for ag in ags_db:
+        if ag["status"] == "Pendente":
+            conflito = any(
+                a for a in ags_db
+                if a is not ag and
+                   a["doca_nome"] == ag["doca_nome"] and
+                   a["data"] == ag["data"] and
+                   a["hora"] == ag["hora"] and
+                   a["status"] in ["Pendente", "Em Processamento", "Confirmado"]
+            )
+            alerta_existente = any(
+                a for a in alertas
+                if a.get("tipo") == "Conflito" and a.get("agendamento_id") == ag["id"] and a.get("status", "Ativo") == "Ativo"
+            )
+            if conflito and not alerta_existente:
+                # Cria alerta no banco usando doca_id
+                from database.db import criar_alerta
+                criar_alerta(
+                    mensagem=f"Conflito de agendamento para doca {ag['doca_nome']} em {ag['data']} {ag['hora']}",
+                    doca_id=ag["doca_id"],
+                    tipo="Conflito",
+                    agendamento_id=ag["id"]
+                )
 
     # Inicializa toggles na sessão
     if "show_agendamentos_gestor" not in st.session_state:
@@ -21,94 +319,575 @@ def render():
         st.session_state.show_encomendas_gestor = False
     if "filtro_encomenda_status" not in st.session_state:
         st.session_state.filtro_encomenda_status = "Todas"
+    if "show_ag_pendentes" not in st.session_state:
+        st.session_state.show_ag_pendentes = False
+    if "show_ag_processando" not in st.session_state:
+        st.session_state.show_ag_processando = False
+    if "show_ag_confirmados" not in st.session_state:
+        st.session_state.show_ag_confirmados = False
+    if "show_ag_cancelados" not in st.session_state:
+        st.session_state.show_ag_cancelados = False
+    if "show_ag_concluidos" not in st.session_state:
+        st.session_state.show_ag_concluidos = False
+
+    st.divider()
 
     # Botão toggle para agendamentos
     if st.button("📅 Ver Agendamentos", key="btn_agendamentos_gestor"):
         st.session_state.show_agendamentos_gestor = not st.session_state.show_agendamentos_gestor
 
     if st.session_state.show_agendamentos_gestor:
+        ags_db = buscar_agendamentos()  # Busca todos os agendamentos do banco
+
+        # Buscar docas alocadas ao cliente de cada agendamento
+        alocacoes = buscar_alocacoes_docas()
+
         # Pendentes
-        st.subheader("Agendamentos Pendentes")
-        for idx, ag in enumerate([a for a in AGENDAMENTOS if a["status"] == "Pendente"]):
-            st.write(f"Cliente: {ag['cliente']} | Doca: {ag['doca']} | {ag['data']} {ag['hora']} | Status: {ag['status']}")
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Aprovar", key=f"aprovar_{idx}"):
-                    ag["status"] = "Em Processamento"
-                    DOCAS[ag["doca"]]["status"] = "Em preparação"
-                    st.success("Agendamento aprovado! Doca em preparação.")
-                    st.rerun()
-            with col2:
-                if st.button("Cancelar", key=f"cancelar_p_{idx}"):
-                    ag["status"] = "Cancelado"
-                    st.warning("Agendamento cancelado!")
-                    st.rerun()
+        if st.button("Agendamentos Pendentes", key="btn_ag_pendentes"):
+            st.session_state.show_ag_pendentes = not st.session_state.show_ag_pendentes
+        if st.session_state.show_ag_pendentes:
+            for idx, ag in enumerate([a for a in ags_db if a["status"] == "Pendente"]):
+                st.markdown(f"""
+<div style="
+    background: linear-gradient(90deg, #fff9e1 60%, #ffe082 100%);
+    padding: 18px 24px;
+    border-radius: 12px;
+    margin-bottom: 18px;
+    box-shadow: 0 2px 12px #0002;
+    border-left: 6px solid #ffb300;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+">
+  <div>
+    <div style="font-size: 1.1rem; color: #b28704; font-weight: 700; letter-spacing: 1px; margin-bottom: 2px;">
+        <span style="vertical-align: middle;">⏳ Agendamento Pendente</span>
+    </div>
+    <div style="color: #222; font-size: 1.05rem; margin-bottom: 2px;">
+        <b>ID:</b> {ag['id']} &nbsp; | &nbsp;
+        <b>Cliente:</b> {ag['usuario_nome']} &nbsp; | &nbsp;
+        <b>Doca:</b> {ag['doca_nome']}
+    </div>
+    <div style="color: #444; font-size: 0.98rem;">
+        <b>Data:</b> {ag['data']} {ag['hora']} &nbsp; | &nbsp;
+        <b>Status:</b> <span style="color:#b28704;">{ag['status']}</span>
+    </div>
+  </div>
+  <div style="text-align: right;">
+    <span style="background:#b2870422; color:#b28704; padding:6px 14px; border-radius:8px; font-weight:700; font-size:0.95rem;">
+        ● Pendente
+    </span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    conflito = any(
+                        a for a in ags_db
+                        if a is not ag and
+                           a["doca_nome"] == ag["doca_nome"] and
+                           a["data"] == ag["data"] and
+                           a["hora"] == ag["hora"] and
+                           a["status"] in ["Pendente", "Em Processamento", "Confirmado"]
+                    )
+                    if st.button("Aprovar", key=f"aprovar_{idx}"):
+                        if conflito:
+                            st.error("Não é possível aprovar: existe conflito de agendamento para esta doca, data e hora!")
+                        else:
+                            # Quando aprovar (Em Processamento)
+                            atualizar_agendamento_status(ag["id"], "Em Processamento")
+                            atualizar_status_doca(ag["doca_id"], "Em preparação")
+                            st.success("Agendamento aprovado! Doca em preparação.")
+                            st.rerun()
+                with col2:
+                    if st.button("Cancelar", key=f"cancelar_p_{idx}"):
+                        atualizar_agendamento_status(ag["id"], "Cancelado")
+                        st.warning("Agendamento cancelado!")
+                        st.rerun()
+                with col3:
+                    if st.button("Reagendar", key=f"reagendar_p_{idx}"):
+                        st.session_state[f"show_reagendar_{idx}"] = not st.session_state.get(f"show_reagendar_{idx}", False)
+                if st.session_state.get(f"show_reagendar_{idx}", False):
+                    with st.form(f"form_reagendar_{idx}"):
+                        import datetime as dt
+                        data_val = ag["data"]
+                        if isinstance(data_val, str):
+                            try:
+                                data_val = dt.datetime.strptime(data_val, "%d/%m/%Y").date()
+                            except Exception:
+                                data_val = dt.date.today()
+                        elif isinstance(data_val, dt.datetime):
+                            data_val = data_val.date()
+                        elif not isinstance(data_val, dt.date):
+                            data_val = dt.date.today()
+                        hora_val = ag["hora"]
+                        if isinstance(hora_val, str):
+                            try:
+                                hora_val = dt.datetime.strptime(hora_val, "%H:%M").time()
+                            except Exception:
+                                hora_val = dt.datetime.now().time()
+                        elif isinstance(hora_val, dt.datetime):
+                            hora_val = hora_val.time()
+                        elif not isinstance(hora_val, dt.time):
+                            hora_val = dt.datetime.now().time()
+                        # Docas alocadas ao cliente deste agendamento
+                        docas_cliente = [d["doca_nome"] for d in alocacoes if d["usuario_id"] == ag["usuario_id"]]
+                        if not docas_cliente:
+                            st.warning("Este cliente não possui docas alocadas.")
+                        else:
+                            nova_data = st.date_input("Nova data", value=data_val)
+                            nova_hora = st.time_input("Nova hora", value=hora_val)
+                            nova_doca = st.selectbox("Nova doca", options=docas_cliente, index=docas_cliente.index(ag["doca_nome"]))
+                            submit = st.form_submit_button("Salvar Reagendamento")
+                            if submit:
+                                docas_db = buscar_docas()
+                                doca_id = next((d["id"] for d in docas_db if d["nome"] == nova_doca), None)
+                                atualizar_agendamento_doca_data_hora(ag["id"], doca_id, nova_data, nova_hora)
+                                st.success("Agendamento reagendado!")
+                                st.session_state[f"show_reagendar_{idx}"] = False
+                                st.rerun()
 
         # Em Processamento
-        st.subheader("Agendamentos em Processamento")
-        for idx, ag in enumerate([a for a in AGENDAMENTOS if a["status"] == "Em Processamento"]):
-            st.write(f"Cliente: {ag['cliente']} | Doca: {ag['doca']} | {ag['data']} {ag['hora']} | Status: {ag['status']}")
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Confirmar", key=f"confirmar_{idx}"):
-                    ag["status"] = "Confirmado"
-                    DOCAS[ag["doca"]]["status"] = "Ocupada"
-                    # Atualiza encomendas relacionadas
-                    for encomenda in ENCOMENDAS:
-                        if encomenda.get("agendamento_idx") == idx and encomenda["status"] == "Em Processamento":
-                            encomenda["status"] = "Processada"
-                            if "historico" not in encomenda:
-                                encomenda["historico"] = []
-                            encomenda["historico"].append({
-                                "acao": "Processada automaticamente ao confirmar agendamento",
-                                "data": datetime.now().strftime("%d/%m/%Y %H:%M")
-                            })
-                    st.success("Agendamento confirmado! Doca ocupada.")
-                    st.rerun()
-            with col2:
-                if st.button("Cancelar", key=f"cancelar_e_{idx}"):
-                    ag["status"] = "Cancelado"
-                    # Atualiza encomendas relacionadas
-                    for encomenda in ENCOMENDAS:
-                        if encomenda.get("agendamento_idx") == idx and encomenda["status"] == "Em Processamento":
-                            encomenda["status"] = "Pendente"
-                            encomenda["agendamento_idx"] = None
-                            if "historico" not in encomenda:
-                                encomenda["historico"] = []
-                            encomenda["historico"].append({
-                                "acao": "Desalocada automaticamente ao cancelar agendamento",
-                                "data": datetime.now().strftime("%d/%m/%Y %H:%M")
-                            })
-                    st.warning("Agendamento cancelado!")
-                    st.rerun()
+        if st.button("Agendamentos em Processamento", key="btn_ag_processando"):
+            st.session_state.show_ag_processando = not st.session_state.show_ag_processando
+        if st.session_state.show_ag_processando:
+            for idx, ag in enumerate([a for a in ags_db if a["status"] == "Em Processamento"]):
+                st.markdown(f"""
+<div style="
+    background: linear-gradient(90deg, #e3f2fd 60%, #90caf9 100%);
+    padding: 18px 24px;
+    border-radius: 12px;
+    margin-bottom: 18px;
+    box-shadow: 0 2px 12px #0002;
+    border-left: 6px solid #1976d2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+">
+  <div>
+    <div style="font-size: 1.1rem; color: #1976d2; font-weight: 600, letter-spacing: 1px; margin-bottom: 2px;">
+        <span style="vertical-align: middle;">🔄 Em Processamento</span>
+    </div>
+    <div style="color: #222; font-size: 1.05rem; margin-bottom: 2px;">
+        <b>ID:</b> {ag['id']} &nbsp; | &nbsp;
+        <b>Cliente:</b> {ag['usuario_nome']} &nbsp; | &nbsp;
+        <b>Doca:</b> {ag['doca_nome']}
+    </div>
+    <div style="color: #444; font-size: 0.98rem;">
+        <b>Data:</b> {ag['data']} {ag['hora']} &nbsp; | &nbsp;
+        <b>Status:</b> <span style="color:#1976d2;">{ag['status']}</span>
+    </div>
+  </div>
+  <div style="text-align: right;">
+    <span style="background:#1976d222; color:#1976d2; padding:6px 14px; border-radius:8px; font-weight:600; font-size:0.95rem;">
+        ● Em Processamento
+    </span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    if st.button("Confirmar", key=f"confirmar_{idx}"):
+                        # Quando confirmar
+                        atualizar_agendamento_status(ag["id"], "Confirmado")
+                        atualizar_status_doca(ag["doca_id"], "Ocupada")
+                        st.success("Agendamento confirmado! Doca ocupada.")
+                        st.rerun()
+                with col2:
+                    if st.button("Cancelar", key=f"cancelar_e_{idx}"):
+                        atualizar_agendamento_status(ag["id"], "Cancelado")
+                        st.warning("Agendamento cancelado!")
+                        st.rerun()
+                with col3:
+                    if st.button("Reagendar", key=f"reagendar_e_{idx}"):
+                        st.session_state[f"show_reagendar_e_{idx}"] = not st.session_state.get(f"show_reagendar_e_{idx}", False)
+                if st.session_state.get(f"show_reagendar_e_{idx}", False):
+                    with st.form(f"form_reagendar_e_{idx}"):
+                        import datetime as dt
+                        data_val = ag["data"]
+                        if isinstance(data_val, str):
+                            try:
+                                data_val = dt.datetime.strptime(data_val, "%d/%m/%Y").date()
+                            except Exception:
+                                data_val = dt.date.today()
+                        elif isinstance(data_val, dt.datetime):
+                            data_val = data_val.date()
+                        elif not isinstance(data_val, dt.date):
+                            data_val = dt.date.today()
+                        hora_val = ag["hora"]
+                        if isinstance(hora_val, str):
+                            try:
+                                hora_val = dt.datetime.strptime(hora_val, "%H:%M").time()
+                            except Exception:
+                                hora_val = dt.datetime.now().time()
+                        elif isinstance(hora_val, dt.datetime):
+                            hora_val = hora_val.time()
+                        elif not isinstance(hora_val, dt.time):
+                            hora_val = dt.datetime.now().time()
+                        # Docas alocadas ao cliente deste agendamento
+                        docas_cliente = [d["doca_nome"] for d in alocacoes if d["usuario_id"] == ag["usuario_id"]]
+                        if not docas_cliente:
+                            st.warning("Este cliente não possui docas alocadas.")
+                        else:
+                            nova_data = st.date_input("Nova data", value=data_val)
+                            nova_hora = st.time_input("Nova hora", value=hora_val)
+                            nova_doca = st.selectbox("Nova doca", options=docas_cliente, index=docas_cliente.index(ag["doca_nome"]))
+                            submit = st.form_submit_button("Salvar Reagendamento")
+                            if submit:
+                                docas_db = buscar_docas()
+                                doca_id = next((d["id"] for d in docas_db if d["nome"] == nova_doca), None)
+                                atualizar_agendamento_doca_data_hora(ag["id"], doca_id, nova_data, nova_hora)
+                                st.success("Agendamento reagendado!")
+                                st.session_state[f"show_reagendar_e_{idx}"] = False
+                                st.rerun()
 
         # Confirmados
-        st.subheader("Agendamentos Confirmados")
-        for ag in [a for a in AGENDAMENTOS if a["status"] == "Confirmado"]:
-            st.write(f"Cliente: {ag['cliente']} | Doca: {ag['doca']} | {ag['data']} {ag['hora']} | Status: {ag['status']}")
+        if st.button("Agendamentos Confirmados", key="btn_ag_confirmados"):
+            st.session_state.show_ag_confirmados = not st.session_state.show_ag_confirmados
+        if st.session_state.show_ag_confirmados:
+            for idx, ag in enumerate([a for a in ags_db if a["status"] == "Confirmado"]):
+                st.markdown(f"""
+<div style="
+    background: linear-gradient(90deg, #e0f7fa 60%, #80deea 100%);
+    padding: 18px 24px;
+    border-radius: 12px;
+    margin-bottom: 18px;
+    box-shadow: 0 2px 12px #0002;
+    border-left: 6px solid #0097a7;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+">
+  <div>
+    <div style="font-size: 1.1rem; color: #0097a7; font-weight: 700; letter-spacing: 1px; margin-bottom: 2px;">
+        <span style="vertical-align: middle;">📅 Agendamento Confirmado</span>
+    </div>
+    <div style="color: #222; font-size: 1.05rem; margin-bottom: 2px;">
+        <b>ID:</b> {ag['id']} &nbsp; | &nbsp;
+        <b>Cliente:</b> {ag['usuario_nome']} &nbsp; | &nbsp;
+        <b>Doca:</b> {ag['doca_nome']}
+    </div>
+    <div style="color: #444; font-size: 0.98rem;">
+        <b>Data:</b> {ag['data']} {ag['hora']} &nbsp; | &nbsp;
+        <b>Status:</b> <span style="color:#0097a7;">{ag['status']}</span>
+    </div>
+  </div>
+  <div style="text-align: right;">
+    <span style="background:#0097a722; color:#0097a7; padding:6px 14px; border-radius:8px; font-weight:700; font-size:0.95rem;">
+        ● Confirmado
+    </span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Concluir", key=f"concluir_{idx}"):
+                        # Quando concluir
+                        atualizar_agendamento_status(ag["id"], "Concluído")
+                        atualizar_status_doca(ag["doca_id"], "Livre")
+                        st.success("Agendamento concluído e doca liberada!")
+                        st.rerun()
+                with col2:
+                    pass
+
+        # Concluídos
+        if st.button("Agendamentos Concluídos", key="btn_ag_concluidos"):
+            st.session_state.show_ag_concluidos = not st.session_state.show_ag_concluidos
+        if st.session_state.show_ag_concluidos:
+            for ag in [a for a in ags_db if a["status"] == "Concluído"]:
+                st.markdown(f"""
+<div style="
+    background: linear-gradient(90deg, #e8f5e9 60%, #a5d6a7 100%);
+    padding: 18px 24px;
+    border-radius: 12px;
+    margin-bottom: 18px;
+    box-shadow: 0 2px 12px #0002;
+    border-left: 6px solid #388e3c;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+">
+  <div>
+    <div style="font-size: 1.1rem; color: #388e3c; font-weight: 600; letter-spacing: 1px; margin-bottom: 2px;">
+        <span style="vertical-align: middle;">✅ Agendamento Concluído</span>
+    </div>
+    <div style="color: #222; font-size: 1.05rem; margin-bottom: 2px;">
+        <b>ID:</b> {ag['id']} &nbsp; | &nbsp;
+        <b>Cliente:</b> {ag['usuario_nome']} &nbsp; | &nbsp;
+        <b>Doca:</b> {ag['doca_nome']}
+    </div>
+    <div style="color: #444; font-size: 0.98rem;">
+        <b>Data:</b> {ag['data']} {ag['hora']} &nbsp; | &nbsp;
+        <b>Status:</b> <span style="color:#388e3c;">{ag['status']}</span>
+    </div>
+  </div>
+  <div style="text-align: right;">
+    <span style="background:#388e3c22; color:#388e3c; padding:6px 14px; border-radius:8px; font-weight:600; font-size:0.95rem;">
+        ● Concluído
+    </span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
         # Cancelados
-        st.subheader("Agendamentos Cancelados")
-        for ag in [a for a in AGENDAMENTOS if a["status"] == "Cancelado"]:
-            st.write(f"Cliente: {ag['cliente']} | Doca: {ag['doca']} | {ag['data']} {ag['hora']} | Status: {ag['status']}")
+        if st.button("Agendamentos Cancelados", key="btn_ag_cancelados"):
+            st.session_state.show_ag_cancelados = not st.session_state.show_ag_cancelados
+        if st.session_state.show_ag_cancelados:
+            for ag in [a for a in ags_db if a["status"] == "Cancelado"]:
+                st.markdown(f"""
+<div style="
+    background: linear-gradient(90deg, #ffebee 60%, #ffcdd2 100%);
+    padding: 18px 24px;
+    border-radius: 12px;
+    margin-bottom: 18px;
+    box-shadow: 0 2px 12px #0002;
+    border-left: 6px solid #d32f2f;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+">
+  <div>
+    <div style="font-size: 1.1rem; color: #d32f2f; font-weight: 600; letter-spacing: 1px; margin-bottom: 2px;">
+        <span style="vertical-align: middle;">❌ Agendamento Cancelado</span>
+    </div>
+    <div style="color: #222; font-size: 1.05rem; margin-bottom: 2px;">
+        <b>ID:</b> {ag['id']} &nbsp; | &nbsp;
+        <b>Cliente:</b> {ag['usuario_nome']} &nbsp; | &nbsp;
+        <b>Doca:</b> {ag['doca_nome']}
+    </div>
+    <div style="color: #444; font-size: 0.98rem;">
+        <b>Data:</b> {ag['data']} {ag['hora']} &nbsp; | &nbsp;
+        <b>Status:</b> <span style="color:#d32f2f;">{ag['status']}</span>
+    </div>
+  </div>
+  <div style="text-align: right;">
+    <span style="background:#d32f2f22; color:#d32f2f; padding:6px 14px; border-radius:8px; font-weight:600; font-size:0.95rem;">
+        ● Cancelado
+    </span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
-    # Botão toggle para alertas
+    # Botão toggle para gestão de docas
+    if st.button("🛠️ Gestão de Docas", key="btn_gestao_docas"):
+        st.session_state.show_gestao_docas = not st.session_state.get("show_gestao_docas", False)
+
+    if st.session_state.get("show_gestao_docas", False):
+        st.markdown(
+            '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Gestão de Docas: Status e Alocação de Clientes</h3>',
+            unsafe_allow_html=True
+        )
+
+        docas = buscar_docas()
+        clientes = buscar_clientes()
+        alocacoes = buscar_alocacoes_docas()
+
+        doca_id_para_clientes = {}
+        for doca in docas:
+            doca_id_para_clientes[doca["id"]] = [
+                a["usuario_nome"] for a in alocacoes if a["doca_id"] == doca["id"]
+            ]
+
+        for doca in docas:
+            cor_borda, cor_grad1, cor_grad2, cor_status, icone, status_legenda = {
+                "Livre": ("#388e3c", "#e8f5e9", "#a5d6a7", "#388e3c", "🟢", "Livre"),
+                "Ocupada": ("#1976d2", "#e3f2fd", "#90caf9", "#1976d2", "🔵", "Ocupada"),
+                "Em preparação": ("#b28704", "#fff9e1", "#ffe082", "#b28704", "🟡", "Em preparação"),
+            }.get(doca["status"], ("#b0bec5", "#eceff1", "#b0bec5", "#78909c", "❔", doca["status"]))
+            clientes_alocados = doca_id_para_clientes.get(doca["id"], [])
+            st.markdown(f"""
+            <div style="
+                background: linear-gradient(90deg, {cor_grad1} 60%, {cor_grad2} 100%);
+                padding: 16px 20px;
+                border-radius: 10px;
+                margin-bottom: 14px;
+                box-shadow: 0 2px 8px #0001;
+                border-left: 6px solid {cor_borda};
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+            ">
+              <div>
+                <div style="font-size: 1.08rem; color: {cor_status}; font-weight: 700; margin-bottom: 2px;">
+                    <span style="vertical-align: middle;">{icone} Doca {doca['nome']}</span>
+                </div>
+                <div style="color: #444; font-size: 0.98rem;">
+                    <b>Status:</b> <span style="color:{cor_status};">{status_legenda}</span>
+                </div>
+                <div style="color: #444; font-size: 0.98rem;">
+                    <b>Clientes alocados:</b> {', '.join(clientes_alocados) if clientes_alocados else 'Nenhum'}
+                </div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            clientes_disponiveis = [c for c in clientes if c["nome"] not in clientes_alocados]
+            col1, col2 = st.columns(2)
+            with col1:
+                cliente_sel = st.selectbox(
+                    f"Selecionar cliente para alocar na doca {doca['nome']}",
+                    options=[""] + [c["nome"] for c in clientes_disponiveis],
+                    key=f"select_cliente_{doca['id']}"
+                )
+                if cliente_sel:
+                    usuario_id = next((c["id"] for c in clientes if c["nome"] == cliente_sel), None)
+                    if usuario_id and st.button(f"Alocar {cliente_sel} em {doca['nome']}", key=f"alocar_{cliente_sel}_{doca['id']}"):
+                        alocar_doca_cliente(doca["id"], usuario_id)
+                        st.success(f"Cliente {cliente_sel} alocado em {doca['nome']}.")
+                        st.rerun()
+            with col2:
+                if clientes_alocados:
+                    cliente_remover = st.selectbox(
+                        f"Remover cliente da doca {doca['nome']}",
+                        options=[""] + clientes_alocados,
+                        key=f"remover_cliente_{doca['id']}"
+                    )
+                    if cliente_remover:
+                        usuario_id = next((c["id"] for c in clientes if c["nome"] == cliente_remover), None)
+                        if usuario_id and st.button(f"Remover {cliente_remover} de {doca['nome']}", key=f"remover_{cliente_remover}_{doca['id']}"):
+                            desalocar_doca_cliente(doca["id"], usuario_id)
+                            st.warning(f"Cliente {cliente_remover} removido de {doca['nome']}.")
+                            st.rerun()
+            st.divider()
+
+    # Botão toggle para encomendas
+    if st.button("📦 Ver Encomendas", key="btn_encomendas_gestor"):
+        st.session_state.show_encomendas_gestor = not st.session_state.show_encomendas_gestor
+
+    if st.session_state.show_encomendas_gestor:
+       
+        encomendas_db = buscar_encomendas()
+        usuarios = {u["id"]: u["nome"] for u in buscar_clientes()}
+
+        # Inicializa toggles para cada status de encomenda
+        encomenda_statuses = ["Pendente", "Em Processamento", "Processada", "Cancelada"]
+        for status in encomenda_statuses:
+            key_toggle = f"show_encomenda_{status.lower().replace(' ', '_')}_gestor"
+            if key_toggle not in st.session_state:
+                st.session_state[key_toggle] = False
+
+        status_labels = {
+            "Pendente": "Encomendas Pendentes",
+            "Em Processamento": "Encomendas em Processamento",
+            "Processada": "Encomendas Processadas",
+            "Cancelada": "Encomendas Canceladas"
+        }
+
+        for status in encomenda_statuses:
+            if st.button(status_labels[status], key=f"btn_encomenda_{status.lower().replace(' ', '_')}_gestor"):
+                st.session_state[f"show_encomenda_{status.lower().replace(' ', '_')}_gestor"] = not st.session_state[f"show_encomenda_{status.lower().replace(' ', '_')}_gestor"]
+            if st.session_state[f"show_encomenda_{status.lower().replace(' ', '_')}_gestor"]:
+                encomendas_filtradas = [e for e in encomendas_db if e["status"] == status]
+                if not encomendas_filtradas:
+                    st.markdown(
+                        f'<h3 style="color:#d0e4f7; font-weight:200; letter-spacing:0.5px; margin-bottom:12px; font-size:1.02rem;">⚠️Nenhuma encomenda.⚠️</h3>',
+                        unsafe_allow_html=True
+                    )
+                else:
+                    for encomenda in encomendas_filtradas:
+                        cor_borda, cor_grad1, cor_grad2, cor_status, icone, status_legenda = {
+                            "Pendente":   ("#b28704", "#fff9e1", "#ffe082", "#b28704", "📦", "Pendente"),
+                            "Em Processamento": ("#1976d2", "#e3f2fd", "#90caf9", "#1976d2", "🔄", "Em Processamento"),
+                            "Processada": ("#388e3c", "#e8f5e9", "#a5d6a7", "#388e3c", "✅", "Processada"),
+                            "Cancelada":  ("#d32f2f", "#ffebee", "#ffcdd2", "#d32f2f", "❌", "Cancelada"),
+                        }[encomenda["status"]]
+
+                        cancelar_key = f"cancelar_gestor_{encomenda['id']}"
+                        cliente_nome = usuarios.get(encomenda["usuario_id"], "Desconhecido")
+
+                        st.markdown(f"""
+                        <div style="
+                            background: linear-gradient(90deg, {cor_grad1} 60%, {cor_grad2} 100%);
+                            padding: 18px 24px;
+                            border-radius: 12px;
+                            margin-bottom: 18px;
+                            box-shadow: 0 2px 12px #0002;
+                            border-left: 6px solid {cor_borda};
+                            display: flex;
+                            align-items: center;
+                            justify-content: space-between;
+                        ">
+                          <div>
+                            <div style="font-size: 1.1rem; color: {cor_status}; font-weight: 700; letter-spacing: 1px; margin-bottom: 2px;">
+                                <span style="vertical-align: middle;">{icone} Encomenda {status_legenda}</span>
+                            </div>
+                            <div style="color: #222; font-size: 1.05rem; margin-bottom: 2px;">
+                                <b>ID:</b> {encomenda['id']} &nbsp; | &nbsp;
+                                <b>Cliente:</b> {cliente_nome}
+                            </div>
+                            <div style="color: #444; font-size: 0.98rem;">
+                                <b>Descrição:</b> {encomenda['descricao']}
+                            </div>
+                            <div style="color: #444; font-size: 0.98rem;">
+                                <b>Status:</b> <span style="color:{cor_status};">{encomenda['status']}</span>
+                            </div>
+                          </div>
+                          <div style="text-align: right;">
+                            <span style="background:{cor_status}22; color:{cor_status}; padding:6px 14px; border-radius:8px; font-weight:700; font-size:0.95rem;">
+                                ● {status_legenda}
+                            </span>
+                          </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        # Botão funcional de cancelar encomenda (apenas se Pendente ou Em Processamento)
+                        if encomenda["status"] in ["Pendente", "Em Processamento"]:
+                            if st.button("Cancelar", key=cancelar_key):
+                                cancelar_encomenda(encomenda["id"])
+                                st.warning("Encomenda cancelada!")
+                                st.rerun()
+        st.divider()
+
+    # Painel de alertas
     if st.button("⚠️ Ver Alertas", key="btn_alertas_gestor"):
         st.session_state.show_alertas_gestor = not st.session_state.show_alertas_gestor
     if "show_alertas_resolvidos" not in st.session_state:
         st.session_state.show_alertas_resolvidos = False
 
     if st.session_state.show_alertas_gestor:
-        st.subheader("Painel de Alertas Gerais")
-        for idx, alerta in enumerate([a for a in ALERTAS if a.get("status", "Ativo") == "Ativo"]):
-            cols = st.columns([6, 1])
-            with cols[0]:
-                st.error(f"{alerta['mensagem']} (Doca {alerta['doca']}) - {alerta['timestamp']}")
-            with cols[1]:
-                if st.button("Resolver", key=f"resolver_alerta_{idx}"):
-                    alerta["status"] = "Resolvido"
-                    alerta["resolvido_por"] = f"Gestor ({usuario})"
-                    alerta["resolvido_em"] = datetime.now().strftime("%d/%m/%Y %H:%M")
+        st.markdown(
+        '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Painel de Alertas Gerais</h3>',
+        unsafe_allow_html=True
+    )
+        for idx, alerta in enumerate([a for a in alertas if a.get("status", "Ativo") == "Ativo"]):
+            cor_borda = "#d32f2f"
+            cor_grad1 = "#ffebee"
+            cor_grad2 = "#ffcdd2"
+            icone = "⏰" if alerta.get("tipo") == "Atraso" else "⚠️"
+            resolver_key = f"resolver_alerta_{idx}"
+
+            col1, col2 = st.columns([8, 1])
+            with col1:
+                st.markdown(f"""
+                <div style="
+                    background: linear-gradient(90deg, {cor_grad1} 60%, {cor_grad2} 100%);
+                    padding: 16px 20px;
+                    border-radius: 10px;
+                    margin-bottom: 14px;
+                    box-shadow: 0 2px 8px #0001;
+                    border-left: 6px solid {cor_borda};
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                ">
+                  <div>
+                    <div style="font-size: 1.05rem; color: {cor_borda}; font-weight: 700; margin-bottom: 2px;">
+                        <span style="vertical-align: middle;">{icone} {alerta['mensagem']}</span>
+                    </div>
+                    <div style="color: #555; font-size: 0.97rem;">
+                        <b>Doca:</b> {alerta.get('doca_nome', 'N/A')} &nbsp; | &nbsp; <b>Data:</b> {alerta['timestamp']}
+                    </div>
+                  </div>
+                  <div style="text-align: right;">
+                    <span style="background:{cor_borda}22; color:{cor_borda}; padding:5px 12px; border-radius:7px; font-weight:600; font-size:0.93rem;">
+                        {alerta['tipo']}
+                    </span>
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col2:
+                if st.button("Resolver", key=resolver_key):
+                    resolver_alerta(alerta["id"], usuario)
                     st.success("Alerta resolvido!")
                     st.rerun()
 
@@ -117,97 +896,49 @@ def render():
             st.session_state.show_alertas_resolvidos = not st.session_state.show_alertas_resolvidos
 
         if st.session_state.show_alertas_resolvidos:
-            st.subheader("Alertas Resolvidos")
-            for alerta in [a for a in ALERTAS if a.get("status", "Ativo") == "Resolvido"]:
+            st.markdown(
+        '<h3 style="color:#d0e4f7; font-weight:800; letter-spacing:0.5px; margin-bottom:12px;">Alertas Resolvidos</h3>',
+        unsafe_allow_html=True
+    )
+            for alerta in [a for a in alertas if a.get("status", "Ativo") == "Resolvido"]:
                 resolvido_por = alerta.get("resolvido_por", "Desconhecido")
                 resolvido_em = alerta.get("resolvido_em", "Data desconhecida")
                 st.markdown(
                     f"""
                     <div style="background-color:#e1f5fe;padding:10px;border-radius:5px;margin-bottom:8px;">
-                        <b>{alerta['mensagem']}</b> (Doca {alerta['doca']}) - {alerta['timestamp']}<br>
+                        <b>{alerta['mensagem']}</b> (Doca {alerta.get('doca_nome', 'N/A')}) - {alerta['timestamp']}<br>
                         <small>Resolvido por: {resolvido_por} em {resolvido_em}</small>
                     </div>
                     """,
                     unsafe_allow_html=True
                 )
 
-    # Botão toggle para docas
-    if st.button("🔎 Ver Docas", key="btn_docas_gestor"):
-        st.session_state.show_docas_gestor = not st.session_state.show_docas_gestor
+    # --- ADICIONE ESTE BLOCO AQUI ---
+    if "show_gestao_utilizadores" not in st.session_state:
+        st.session_state.show_gestao_utilizadores = False
 
-    if st.session_state.show_docas_gestor:
-        st.subheader("Status das Docas")
-        for doca_id, doca in DOCAS.items():
-            st.info(f"Doca {doca_id}: {doca['status']}")
+    if st.button("👤 Gestão de Utilizadores", key="btn_gestao_utilizadores"):
+        st.session_state.show_gestao_utilizadores = not st.session_state.show_gestao_utilizadores
 
-    # Sincroniza status das docas com os agendamentos mais recentes
-    for doca_id in DOCAS.keys():
-        ags_doca = [a for a in AGENDAMENTOS if a["doca"] == doca_id]
-        ags_doca.sort(key=lambda x: (x["data"], x["hora"]), reverse=True)
-        for ag in ags_doca:
-            if ag["status"] == "Confirmado":
-                DOCAS[doca_id]["status"] = "Ocupada"
-                break
-            elif ag["status"] == "Em Processamento":
-                DOCAS[doca_id]["status"] = "Em preparação"
-                break
-        else:
-            DOCAS[doca_id]["status"] = "Livre"  # Sempre define como Livre se não houver agendamento relevante
+    if st.session_state.show_gestao_utilizadores:
+        painel_gestao_utilizadores()
+        st.divider()
+    # --- FIM DO BLOCO ---
 
-    # Botão toggle para encomendas (coloque antes do rodapé e botão sair)
-    if st.button("📦 Ver Encomendas", key="btn_encomendas_gestor"):
-        st.session_state.show_encomendas_gestor = not st.session_state.show_encomendas_gestor
+    if "show_metricas_gestor" not in st.session_state:
+        st.session_state.show_metricas_gestor = False
 
-    if st.session_state.show_encomendas_gestor:
-        st.subheader("Todas as Encomendas")
-        status_options = ["Todas", "Pendente", "Em Processamento", "Processada", "Cancelada"]
-        st.session_state.filtro_encomenda_status = st.selectbox(
-            "Filtrar por status:",
-            status_options,
-            index=status_options.index(st.session_state.filtro_encomenda_status),
-            key="filtro_encomenda_status_select"
-        )
-        if st.session_state.filtro_encomenda_status == "Todas":
-            encomendas_filtradas = ENCOMENDAS
-        else:
-            encomendas_filtradas = [e for e in ENCOMENDAS if e["status"] == st.session_state.filtro_encomenda_status]
+    if st.button("📈 Ver Painel de Métricas", key="btn_metricas_gestor"):
+        st.session_state.show_metricas_gestor = not st.session_state.show_metricas_gestor
 
-        if not encomendas_filtradas:
-            st.info("Nenhuma encomenda encontrada para o filtro selecionado.")
-        else:
-            for encomenda in encomendas_filtradas:
-                st.markdown(f"**ID:** {encomenda['id']}")
-                st.markdown(f"**Descrição:** {encomenda['descricao']}")
-                st.markdown(f"**Cliente:** {encomenda['cliente']}")
-                st.markdown(f"**Status atual:** {encomenda['status']}")
-                # Mostrar agendamento associado, se houver
-                if encomenda["agendamento_idx"] is not None:
-                    ag = AGENDAMENTOS[encomenda["agendamento_idx"]]
-                    st.markdown(
-                        f"**Agendamento:** {ag['data']} {ag['hora']} | Doca {ag['doca']} | Status: {ag['status']}"
-                    )
-                # Cancelar encomenda (apenas se Pendente ou Em Processamento)
-                if encomenda["status"] in ["Pendente", "Em Processamento"]:
-                    if st.button("Cancelar Encomenda", key=f"cancelar_gestor_{encomenda['id']}"):
-                        encomenda["status"] = "Cancelada"
-                        encomenda["agendamento_idx"] = None
-                        if "historico" not in encomenda:
-                            encomenda["historico"] = []
-                        encomenda["historico"].append({
-                            "acao": "Cancelada pelo gestor",
-                            "data": datetime.now().strftime("%d/%m/%Y %H:%M")
-                        })
-                        st.warning("Encomenda cancelada!")
-                        st.rerun()
-                # Histórico da encomenda
-                if "historico" in encomenda and encomenda["historico"]:
-                    with st.expander("Histórico da Encomenda"):
-                        for h in encomenda["historico"]:
-                            st.markdown(f"- {h['acao']} em {h['data']}")
-                st.divider()
+    if st.session_state.show_metricas_gestor:
+        painel_metricas()
 
     st.divider()
-    st.caption(f"Utilizador: ID: {usuario} | Email: {usuario}@manager.smid")
+    st.markdown(
+    f'<div style="color:#90caf9; font-size:0.98rem; margin-top:24px; text-align:right;">Utilizador: <b>ID:</b> {st.session_state.nome} &nbsp;|&nbsp; <b>Email:</b> {usuario}</div>',
+    unsafe_allow_html=True
+)
 
     if st.button("🔓 Sair"):
         st.session_state.logado = False

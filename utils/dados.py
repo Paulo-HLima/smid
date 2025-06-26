@@ -10,8 +10,8 @@ DOCAS = {
 
 # Dicionário de clientes com lista de docas associadas
 CLIENTES = {
-    "CL99578": {"docas": ["A5", "A6"]},
-    "CL22103": {"docas": ["A2", "A1"]},
+    "CL99578": {"docas": ["A5", "A6", "A1"]},
+    "CL22103": {"docas": ["A2", "A1", "A5"]},
 }
 
 # Lista de agendamentos fictícios
@@ -31,7 +31,6 @@ OPERADORES = {
 ALERTAS = [
     {"id": 1, "tipo": "falha", "doca": "A2", "mensagem": "Sensor Offline", "timestamp": "22/05/2025 13:55", "status": "Ativo"},
     {"id": 2, "tipo": "atraso", "doca": "A2", "mensagem": "Agendamento atrasado - Cliente CL22103", "timestamp": "22/05/2025 15:40", "status": "Ativo"},
-    {"id": 3, "tipo": "conflito", "doca": "A5", "mensagem": "Conflito de Agendamentos - Cliente CL99578", "timestamp": "22/05/2025 15:40", "status": "Ativo"},
 ]
 
 # Lista de encomendas fictícias
@@ -54,15 +53,15 @@ ENCOMENDAS = [
         "id": 3,
         "descricao": "Bobinas de papel",
         "cliente": "CL99578",
-        "agendamento_idx": 1,  # Alocada ao segundo agendamento (Em Processamento)
-        "status": "Em Processamento",
+        "agendamento_idx": None,  # None = não alocada
+        "status": "Pendente",
     },
     {
         "id": 4,
         "descricao": "Equipamentos de informática",
         "cliente": "CL22103",
-        "agendamento_idx": 0,  # Alocada ao primeiro agendamento (Confirmado)
-        "status": "Processada",
+        "agendamento_idx": None,  # None = não alocada
+        "status": "Pendente",
     },
     {
         "id": 5,
